@@ -1,0 +1,19 @@
+@import '../js/Assets/styles/tailwind.css'; /* ✅ Must come first */
+
+:root {
+  --color-brand-50: #E8F3FF;
+  --color-brand-100: #D6E8FF;
+  --color-brand-200: #B5D4FF;
+  --color-brand-300: #88B7FF;
+  --color-brand-400: #5A8EFF;
+  --color-brand-500: #3466FF;
+  --color-brand-600: #123AFF;
+  --color-brand-700: #082CFA;
+  --color-brand-800: #0A29C9;
+  --color-brand-900: #102685;
+  --color-brand-950: #0B185B;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

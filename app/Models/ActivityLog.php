@@ -1,0 +1,14 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class ActivityLog extends Model
+{
+    protected $table = 'activity_logs';
+
+    protected $fillable = [
+        'username', 'activity_id', 'activity_date', 'ticket_id', 'remarks_data',
+    ];
+}
