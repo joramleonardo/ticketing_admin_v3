@@ -85,34 +85,6 @@ class TicketV2Controller extends Controller
         ];
         $KNOWN_DIVISIONS = array_merge(array_keys($DIVISION_MAP), array_values($DIVISION_MAP));
 
-        // Table names (safer for joins)
-        $clientTbl = (new TicketClientDetail)->getTable(); // e.g., v2_ticket_client_details
-        $detailTbl = (new TicketDetail)->getTable();       // e.g., v2_ticket_details
-
-        // --- Helper: apply the SAME date predicates to a joined query using alias d ---
-        $applyDateFiltersJoin = function ($q) use ($year, $month, $quarter, $monthsArr, $dateFrom, $dateTo) {
-            if ($dateFrom) {
-                $q->whereDate('d.date_requested', '>=', $dateFrom);
-            }
-            if ($dateTo) {
-                $q->whereDate('d.date_requested', '<=', $dateTo);
-            }
-            if ($year) {
-                $q->whereYear('d.date_requested', $year);
-            }
-            if (! empty($monthsArr)) {
-                $q->whereIn(\DB::raw('MONTH(d.date_requested)'), $monthsArr);
-            } elseif ($quarter !== '') {
-                $ranges = ['Q1' => [1, 3], 'Q2' => [4, 6], 'Q3' => [7, 9], 'Q4' => [10, 12]];
-                if (isset($ranges[$quarter])) {
-                    [$m1, $m2] = $ranges[$quarter];
-                    $q->whereBetween(\DB::raw('MONTH(d.date_requested)'), [$m1, $m2]);
-                }
-            } elseif ($month) {
-                $q->whereMonth('d.date_requested', $month);
-            }
-        };
-
         // --- Helper: apply the SAME date predicates to a relation ('detail') ---
         $applyDateFiltersRel = function ($d) use ($year, $month, $quarter, $monthsArr, $dateFrom, $dateTo) {
             if ($dateFrom) {
@@ -291,90 +263,7 @@ class TicketV2Controller extends Controller
 
         $tickets = $query->paginate($perPage)->withQueryString();
 
-        // -----------------------------------------
-        // COUNTS: base (no status or preset filter) with SAME predicates
-        // -----------------------------------------
-        $base = TicketClientDetail::query()
-            ->from($clientTbl.' as c')
-            ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
-
-            // division filter (same as above)
-            ->when($division !== '', function ($q) use ($division, $DIVISION_MAP, $KNOWN_DIVISIONS) {
-                if (strcasecmp($division, 'OTHERS') === 0) {
-                    $q->where(function ($qq) use ($KNOWN_DIVISIONS) {
-                        $qq->whereNull('c.client_division_agency')
-                            ->orWhere('c.client_division_agency', '')
-                            ->orWhereNotIn('c.client_division_agency', $KNOWN_DIVISIONS);
-                    });
-                } else {
-                    $label = $DIVISION_MAP[$division] ?? $division;
-                    $q->where(function ($qq) use ($division, $label) {
-                        $qq->where('c.client_division_agency', $division)
-                            ->orWhere('c.client_division_agency', $label);
-                    });
-                }
-            })
-
-            // search (mirror logic using aliases)
-            ->when($search !== '', function ($q) use ($search) {
-                $term = '%'.$search.'%';
-                $q->where(function ($sub) use ($term) {
-                    $sub->where('c.client_referenceNo', 'like', $term)
-                        ->orWhere('c.client_name', 'like', $term)
-                        ->orWhere('c.client_empID', 'like', $term)
-                        ->orWhere('c.client_division_agency', 'like', $term)
-                        ->orWhere('d.client_referenceNo', 'like', $term)
-                        ->orWhere('d.ticket_support_type', 'like', $term)
-                        ->orWhere('d.ticket_nature_of_support', 'like', $term)
-                        ->orWhere('d.ticket_problem_that_needed_support', 'like', $term)
-                        ->orWhere('d.ticket_assigned_staff', 'like', $term)
-                        ->orWhere('d.ticket_remarks', 'like', $term);
-                });
-            })
-
-            ->when($assignedStaff !== '', function ($q) use ($assignedStaff) {
-                $q->where(function ($sub) use ($assignedStaff) {
-                    $sub->where('d.ticket_assigned_staff', $assignedStaff)
-                        ->orWhere('d.ticket_assisted_by', 'like', "%{$assignedStaff}%");
-                });
-            });
-
-        // NEW: date filters (same as listing), but on the JOINed query (alias d)
-        $applyDateFiltersJoin($base);
-
-        $cutoff = now()->subHours(24)->toDateTimeString();
-        $safeCurrentUser = ! empty($currentUserName) ? addslashes($currentUserName) : '';
-
-        $countsRow = (clone $base)
-            ->selectRaw("
-            COUNT(*) as all_count,
-            SUM(CASE WHEN d.ticket_status = 'New' THEN 1 ELSE 0 END)          as new_count,
-            SUM(CASE WHEN d.ticket_status = 'Pending' THEN 1 ELSE 0 END)      as pending_count,
-            SUM(CASE WHEN d.ticket_status = 'In Progress' THEN 1 ELSE 0 END)  as inprogress_count,
-            SUM(CASE WHEN d.ticket_status = 'Completed' THEN 1 ELSE 0 END)    as completed_count,
-            SUM(CASE WHEN d.ticket_status = 'Cancelled' THEN 1 ELSE 0 END)    as cancelled_count,
-            SUM(CASE WHEN d.ticket_status = 'Closed' THEN 1 ELSE 0 END)       as closed_count,
-            SUM(CASE WHEN d.ticket_status IN ('New', 'Pending', 'In Progress') AND (d.date_requested <= '{$cutoff}' OR (d.date_requested IS NULL AND d.created_at <= '{$cutoff}')) THEN 1 ELSE 0 END) as overdue_count,
-            SUM(CASE WHEN d.ticket_status = 'New' OR d.ticket_assigned_staff IS NULL OR TRIM(d.ticket_assigned_staff) = '' THEN 1 ELSE 0 END) as unassigned_count
-            ".($safeCurrentUser ? ", SUM(CASE WHEN d.ticket_assigned_staff = '{$safeCurrentUser}' OR d.ticket_assisted_by LIKE '%{$safeCurrentUser}%' THEN 1 ELSE 0 END) as assigned_to_me_count" : ', 0 as assigned_to_me_count').'
-        ')
-            ->first();
-
-        $counts = [
-            'All' => (int) ($countsRow->all_count ?? 0),
-            'New' => (int) ($countsRow->new_count ?? 0),
-            'Pending' => (int) ($countsRow->pending_count ?? 0),
-            'In Progress' => (int) ($countsRow->inprogress_count ?? 0),
-            'Completed' => (int) ($countsRow->completed_count ?? 0),
-            'Cancelled' => (int) ($countsRow->cancelled_count ?? 0),
-            'Closed' => (int) ($countsRow->closed_count ?? 0),
-            'presets' => [
-                'assigned_to_me' => (int) ($countsRow->assigned_to_me_count ?? 0),
-                'overdue' => (int) ($countsRow->overdue_count ?? 0),
-                'awaiting_rating' => (int) ($countsRow->completed_count ?? 0),
-                'unassigned' => (int) ($countsRow->unassigned_count ?? 0),
-            ],
-        ];
+        $counts = $this->getFilteredCounts($request);
 
         return Inertia::render('TicketsV2/All', [ // <- ensure this matches your Vue path
             'tickets' => $tickets,
@@ -522,13 +411,16 @@ class TicketV2Controller extends Controller
 
     public function destroy($id)
     {
-        if (! Auth::check() || Auth::user()->role !== 'Admin') {
+        if (! Auth::check() || ! in_array(Auth::user()->role, ['Admin', 'Super Admin'], true)) {
             abort(403, 'Only Admin can delete tickets.');
         }
 
         DB::transaction(function () use ($id) {
-            // Load the ticket and its reference number
-            $ticket = TicketClientDetail::with('detail')->findOrFail($id);
+            // Load the ticket by client_id or reference number
+            $ticket = TicketClientDetail::with('detail')
+                ->where('client_id', $id)
+                ->orWhere('client_referenceNo', $id)
+                ->firstOrFail();
             $ref = $ticket->client_referenceNo;
 
             // 1) delete logs for this reference
@@ -540,6 +432,13 @@ class TicketV2Controller extends Controller
             // 3) delete parent
             $ticket->delete();
         });
+
+        if (request()->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Ticket and related logs deleted.',
+            ]);
+        }
 
         return back()->with('success', 'Ticket and related logs deleted.');
     }
@@ -917,6 +816,10 @@ class TicketV2Controller extends Controller
      */
     public function bulkAssign(Request $request)
     {
+        if (! Auth::check() || ! in_array(Auth::user()->role, ['Admin', 'Super Admin'], true)) {
+            abort(403, 'Only administrators can assign tickets.');
+        }
+
         $validated = $request->validate([
             'ticket_ids' => 'required|array|min:1',
             'ticket_ids.*' => 'required',
@@ -1025,7 +928,7 @@ class TicketV2Controller extends Controller
      */
     public function bulkDelete(Request $request)
     {
-        if (! Auth::user() || Auth::user()->role !== 'Admin') {
+        if (! Auth::user() || ! in_array(Auth::user()->role, ['Admin', 'Super Admin'], true)) {
             abort(403, 'Only Admin can delete tickets.');
         }
 
@@ -1108,46 +1011,10 @@ class TicketV2Controller extends Controller
                 ->get();
         }
 
-        // Fast counts recalculation if updates found or requested
+        // Fast counts recalculation if updates found or requested (respecting active filters)
         $counts = null;
         if (! empty($newTickets) || $request->boolean('include_counts')) {
-            $detailTbl = (new TicketDetail)->getTable();
-            $clientTbl = (new TicketClientDetail)->getTable();
-            $cutoff = now()->subHours(24)->toDateTimeString();
-            $safeCurrentUser = ! empty($currentUserName) ? addslashes($currentUserName) : '';
-
-            $countsRow = TicketClientDetail::query()
-                ->from($clientTbl.' as c')
-                ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
-                ->selectRaw("
-                    COUNT(*) as all_count,
-                    SUM(CASE WHEN d.ticket_status = 'New' THEN 1 ELSE 0 END)          as new_count,
-                    SUM(CASE WHEN d.ticket_status = 'Pending' THEN 1 ELSE 0 END)      as pending_count,
-                    SUM(CASE WHEN d.ticket_status = 'In Progress' THEN 1 ELSE 0 END)  as inprogress_count,
-                    SUM(CASE WHEN d.ticket_status = 'Completed' THEN 1 ELSE 0 END)    as completed_count,
-                    SUM(CASE WHEN d.ticket_status = 'Cancelled' THEN 1 ELSE 0 END)    as cancelled_count,
-                    SUM(CASE WHEN d.ticket_status = 'Closed' THEN 1 ELSE 0 END)       as closed_count,
-                    SUM(CASE WHEN d.ticket_status IN ('New', 'Pending', 'In Progress') AND (d.date_requested <= '{$cutoff}' OR (d.date_requested IS NULL AND d.created_at <= '{$cutoff}')) THEN 1 ELSE 0 END) as overdue_count,
-                    SUM(CASE WHEN d.ticket_status = 'New' OR d.ticket_assigned_staff IS NULL OR TRIM(d.ticket_assigned_staff) = '' THEN 1 ELSE 0 END) as unassigned_count
-                    ".($safeCurrentUser ? ", SUM(CASE WHEN d.ticket_assigned_staff = '{$safeCurrentUser}' OR d.ticket_assisted_by LIKE '%{$safeCurrentUser}%' THEN 1 ELSE 0 END) as assigned_to_me_count" : ', 0 as assigned_to_me_count').'
-                ')
-                ->first();
-
-            $counts = [
-                'All' => (int) ($countsRow->all_count ?? 0),
-                'New' => (int) ($countsRow->new_count ?? 0),
-                'Pending' => (int) ($countsRow->pending_count ?? 0),
-                'In Progress' => (int) ($countsRow->inprogress_count ?? 0),
-                'Completed' => (int) ($countsRow->completed_count ?? 0),
-                'Cancelled' => (int) ($countsRow->cancelled_count ?? 0),
-                'Closed' => (int) ($countsRow->closed_count ?? 0),
-                'presets' => [
-                    'assigned_to_me' => (int) ($countsRow->assigned_to_me_count ?? 0),
-                    'overdue' => (int) ($countsRow->overdue_count ?? 0),
-                    'awaiting_rating' => (int) ($countsRow->completed_count ?? 0),
-                    'unassigned' => (int) ($countsRow->unassigned_count ?? 0),
-                ],
-            ];
+            $counts = $this->getFilteredCounts($request);
         }
 
         return response()->json([
@@ -1158,6 +1025,324 @@ class TicketV2Controller extends Controller
             'has_new_messages' => ! empty($newMessages) && count($newMessages) > 0,
             'new_messages' => $newMessages,
             'counts' => $counts,
+        ]);
+    }
+
+    /**
+     * Calculate status and workflow preset counts filtered by division, search, staff, and date criteria.
+     *
+     * @return array<string, mixed>
+     */
+    private function getFilteredCounts(Request $request): array
+    {
+        $search = trim((string) $request->input('search', ''));
+        $division = trim((string) $request->input('division', ''));
+        $assignedStaff = trim((string) $request->input('assigned_staff', ''));
+        $currentUserName = Auth::user()?->name;
+
+        $datePreset = trim((string) $request->input('date_preset', ''));
+        $dateFrom = trim((string) $request->input('date_from', ''));
+        $dateTo = trim((string) $request->input('date_to', ''));
+
+        if ($datePreset === 'today') {
+            $dateFrom = now()->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'yesterday') {
+            $dateFrom = now()->subDay()->toDateString();
+            $dateTo = now()->subDay()->toDateString();
+        } elseif ($datePreset === 'last_7_days') {
+            $dateFrom = now()->subDays(6)->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'this_month') {
+            $dateFrom = now()->startOfMonth()->toDateString();
+            $dateTo = now()->endOfMonth()->toDateString();
+        }
+
+        $year = $request->filled('year') ? (int) $request->input('year') : null;
+        $month = $request->filled('month') ? (int) $request->input('month') : null;
+        $quarter = trim((string) $request->input('quarter', ''));
+        $monthsCsv = trim((string) $request->input('months', ''));
+        $monthsArr = [];
+        if ($monthsCsv !== '') {
+            $monthsArr = array_values(array_filter(array_map(function ($v) {
+                $n = (int) trim($v);
+
+                return ($n >= 1 && $n <= 12) ? $n : null;
+            }, explode(',', $monthsCsv))));
+        }
+
+        $DIVISION_MAP = [
+            '1' => 'FAD',
+            '2' => 'IRAD',
+            '3' => 'CRPD',
+            '4' => 'OD-MISPS',
+        ];
+        $KNOWN_DIVISIONS = array_merge(array_keys($DIVISION_MAP), array_values($DIVISION_MAP));
+
+        $clientTbl = (new TicketClientDetail)->getTable();
+        $detailTbl = (new TicketDetail)->getTable();
+
+        $base = TicketClientDetail::query()
+            ->from($clientTbl.' as c')
+            ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
+            ->when($division !== '', function ($q) use ($division, $DIVISION_MAP, $KNOWN_DIVISIONS) {
+                if (strcasecmp($division, 'OTHERS') === 0) {
+                    $q->where(function ($qq) use ($KNOWN_DIVISIONS) {
+                        $qq->whereNull('c.client_division_agency')
+                            ->orWhere('c.client_division_agency', '')
+                            ->orWhereNotIn('c.client_division_agency', $KNOWN_DIVISIONS);
+                    });
+                } else {
+                    $label = $DIVISION_MAP[$division] ?? $division;
+                    $q->where(function ($qq) use ($division, $label) {
+                        $qq->where('c.client_division_agency', $division)
+                            ->orWhere('c.client_division_agency', $label);
+                    });
+                }
+            })
+            ->when($search !== '', function ($q) use ($search) {
+                $term = '%'.$search.'%';
+                $q->where(function ($sub) use ($term) {
+                    $sub->where('c.client_referenceNo', 'like', $term)
+                        ->orWhere('c.client_name', 'like', $term)
+                        ->orWhere('c.client_empID', 'like', $term)
+                        ->orWhere('c.client_division_agency', 'like', $term)
+                        ->orWhere('d.client_referenceNo', 'like', $term)
+                        ->orWhere('d.ticket_support_type', 'like', $term)
+                        ->orWhere('d.ticket_nature_of_support', 'like', $term)
+                        ->orWhere('d.ticket_problem_that_needed_support', 'like', $term)
+                        ->orWhere('d.ticket_assigned_staff', 'like', $term)
+                        ->orWhere('d.ticket_remarks', 'like', $term);
+                });
+            })
+            ->when($assignedStaff !== '', function ($q) use ($assignedStaff) {
+                $q->where(function ($sub) use ($assignedStaff) {
+                    $sub->where('d.ticket_assigned_staff', $assignedStaff)
+                        ->orWhere('d.ticket_assisted_by', 'like', "%{$assignedStaff}%");
+                });
+            });
+
+        if ($dateFrom) {
+            $base->whereDate('d.date_requested', '>=', $dateFrom);
+        }
+        if ($dateTo) {
+            $base->whereDate('d.date_requested', '<=', $dateTo);
+        }
+        if ($year) {
+            $base->whereYear('d.date_requested', $year);
+        }
+        if (! empty($monthsArr)) {
+            $base->whereIn(DB::raw('MONTH(d.date_requested)'), $monthsArr);
+        } elseif ($quarter !== '') {
+            $ranges = ['Q1' => [1, 3], 'Q2' => [4, 6], 'Q3' => [7, 9], 'Q4' => [10, 12]];
+            if (isset($ranges[$quarter])) {
+                [$m1, $m2] = $ranges[$quarter];
+                $base->whereBetween(DB::raw('MONTH(d.date_requested)'), [$m1, $m2]);
+            }
+        } elseif ($month) {
+            $base->whereMonth('d.date_requested', $month);
+        }
+
+        $cutoff = now()->subHours(24)->toDateTimeString();
+
+        $countsSelect = "
+            COUNT(*) as all_count,
+            SUM(CASE WHEN d.ticket_status = 'New' THEN 1 ELSE 0 END)          as new_count,
+            SUM(CASE WHEN d.ticket_status = 'Pending' THEN 1 ELSE 0 END)      as pending_count,
+            SUM(CASE WHEN d.ticket_status = 'In Progress' THEN 1 ELSE 0 END)  as inprogress_count,
+            SUM(CASE WHEN d.ticket_status = 'Completed' THEN 1 ELSE 0 END)    as completed_count,
+            SUM(CASE WHEN d.ticket_status = 'Cancelled' THEN 1 ELSE 0 END)    as cancelled_count,
+            SUM(CASE WHEN d.ticket_status = 'Closed' THEN 1 ELSE 0 END)       as closed_count,
+            SUM(CASE WHEN d.ticket_status IN ('New', 'Pending', 'In Progress') AND (d.date_requested <= ? OR (d.date_requested IS NULL AND d.created_at <= ?)) THEN 1 ELSE 0 END) as overdue_count,
+            SUM(CASE WHEN d.ticket_status = 'New' OR d.ticket_assigned_staff IS NULL OR TRIM(d.ticket_assigned_staff) = '' THEN 1 ELSE 0 END) as unassigned_count
+        ";
+
+        if (! empty($currentUserName)) {
+            $countsRow = (clone $base)
+                ->selectRaw(
+                    $countsSelect.', SUM(CASE WHEN d.ticket_assigned_staff = ? OR d.ticket_assisted_by LIKE ? THEN 1 ELSE 0 END) as assigned_to_me_count',
+                    [$cutoff, $cutoff, $currentUserName, "%{$currentUserName}%"]
+                )
+                ->first();
+        } else {
+            $countsRow = (clone $base)
+                ->selectRaw(
+                    $countsSelect.', 0 as assigned_to_me_count',
+                    [$cutoff, $cutoff]
+                )
+                ->first();
+        }
+
+        // Real-time staff workloads across all open tickets (plus filtered total)
+        $staffRows = TicketDetail::query()
+            ->whereNotNull('ticket_assigned_staff')
+            ->whereRaw("TRIM(ticket_assigned_staff) != ''")
+            ->selectRaw("
+                TRIM(ticket_assigned_staff) as staff_name,
+                SUM(CASE WHEN ticket_status IN ('New', 'Pending', 'In Progress') THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN ticket_status = 'In Progress' THEN 1 ELSE 0 END) as in_progress_count,
+                SUM(CASE WHEN ticket_status = 'Pending' THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN ticket_status IN ('Completed', 'Closed') THEN 1 ELSE 0 END) as resolved_count,
+                COUNT(*) as total_count
+            ")
+            ->groupBy(DB::raw('TRIM(ticket_assigned_staff)'))
+            ->get();
+
+        $staffWorkloads = [];
+        foreach ($staffRows as $sr) {
+            $key = strtolower(trim((string) $sr->staff_name));
+            if ($key !== '') {
+                $staffWorkloads[$key] = [
+                    'name' => $sr->staff_name,
+                    'active' => (int) ($sr->active_count ?? 0),
+                    'in_progress' => (int) ($sr->in_progress_count ?? 0),
+                    'pending' => (int) ($sr->pending_count ?? 0),
+                    'resolved' => (int) ($sr->resolved_count ?? 0),
+                    'total' => (int) ($sr->total_count ?? 0),
+                ];
+            }
+        }
+
+        // Support nature breakdown across the filtered queue
+        $natureRows = (clone $base)
+            ->selectRaw("
+                COALESCE(NULLIF(TRIM(d.ticket_nature_of_support), ''), NULLIF(TRIM(d.ticket_type), ''), 'Unspecified') as nature_label,
+                COUNT(*) as total
+            ")
+            ->groupBy('nature_label')
+            ->orderByDesc('total')
+            ->limit(6)
+            ->get();
+
+        $natureBreakdown = $natureRows->map(fn ($r) => [
+            'name' => (string) $r->nature_label,
+            'count' => (int) $r->total,
+        ])->values()->all();
+
+        // Division breakdown across the filtered queue
+        $divisionRows = (clone $base)
+            ->selectRaw("
+                CASE
+                    WHEN UPPER(TRIM(c.client_division_agency)) IN ('1', 'FAD') THEN 'FAD'
+                    WHEN UPPER(TRIM(c.client_division_agency)) IN ('2', 'IRAD') THEN 'IRAD'
+                    WHEN UPPER(TRIM(c.client_division_agency)) IN ('3', 'CRPD') THEN 'CRPD'
+                    WHEN UPPER(TRIM(c.client_division_agency)) IN ('4', 'OD-MISPS') THEN 'OD-MISPS'
+                    ELSE 'OTHERS'
+                END as division_label,
+                COUNT(*) as total
+            ")
+            ->groupBy('division_label')
+            ->orderByDesc('total')
+            ->get();
+
+        $divisionBreakdown = $divisionRows->map(fn ($r) => [
+            'name' => (string) $r->division_label,
+            'count' => (int) $r->total,
+        ])->values()->all();
+
+        return [
+            'All' => (int) ($countsRow->all_count ?? 0),
+            'New' => (int) ($countsRow->new_count ?? 0),
+            'Pending' => (int) ($countsRow->pending_count ?? 0),
+            'In Progress' => (int) ($countsRow->inprogress_count ?? 0),
+            'Completed' => (int) ($countsRow->completed_count ?? 0),
+            'Cancelled' => (int) ($countsRow->cancelled_count ?? 0),
+            'Closed' => (int) ($countsRow->closed_count ?? 0),
+            'presets' => [
+                'assigned_to_me' => (int) ($countsRow->assigned_to_me_count ?? 0),
+                'overdue' => (int) ($countsRow->overdue_count ?? 0),
+                'awaiting_rating' => (int) ($countsRow->completed_count ?? 0),
+                'unassigned' => (int) ($countsRow->unassigned_count ?? 0),
+            ],
+            'staff_workloads' => $staffWorkloads,
+            'nature_breakdown' => $natureBreakdown,
+            'division_breakdown' => $divisionBreakdown,
+        ];
+    }
+
+    /**
+     * Global navbar quick search endpoint returning matching tickets.
+     */
+    public function quickSearch(Request $request)
+    {
+        $query = trim((string) $request->input('q', ''));
+        if ($query === '') {
+            return response()->json([
+                'results' => [],
+                'total' => 0,
+            ]);
+        }
+
+        $clientTbl = (new TicketClientDetail)->getTable();
+        $detailTbl = (new TicketDetail)->getTable();
+        $term = '%'.$query.'%';
+
+        $DIVISION_MAP = [
+            '1' => 'FAD',
+            '2' => 'IRAD',
+            '3' => 'CRPD',
+            '4' => 'OD-MISPS',
+        ];
+
+        $baseQuery = TicketClientDetail::query()
+            ->from($clientTbl.' as c')
+            ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
+            ->where(function ($sub) use ($term) {
+                $sub->where('c.client_referenceNo', 'like', $term)
+                    ->orWhere('c.client_name', 'like', $term)
+                    ->orWhere('c.client_email', 'like', $term)
+                    ->orWhere('c.client_empID', 'like', $term)
+                    ->orWhere('c.client_division_agency', 'like', $term)
+                    ->orWhere('d.ticket_support_type', 'like', $term)
+                    ->orWhere('d.ticket_nature_of_support', 'like', $term)
+                    ->orWhere('d.ticket_problem_that_needed_support', 'like', $term)
+                    ->orWhere('d.ticket_assigned_staff', 'like', $term)
+                    ->orWhere('d.ticket_remarks', 'like', $term);
+            });
+
+        $total = (clone $baseQuery)->count();
+
+        $rows = $baseQuery
+            ->select([
+                'c.client_id',
+                'c.client_referenceNo',
+                'c.client_name',
+                'c.client_division_agency',
+                'd.ticket_status',
+                'd.ticket_type',
+                'd.ticket_nature_of_support',
+                'd.ticket_support_type',
+                'd.ticket_problem_that_needed_support',
+                'd.ticket_assigned_staff',
+                'd.date_requested',
+                'c.created_at',
+            ])
+            ->orderByDesc('d.date_requested')
+            ->orderByDesc('c.client_id')
+            ->limit(6)
+            ->get()
+            ->map(function ($row) use ($DIVISION_MAP) {
+                $rawDiv = trim((string) ($row->client_division_agency ?? ''));
+                $division = $DIVISION_MAP[$rawDiv] ?? ($rawDiv !== '' ? strtoupper($rawDiv) : 'OTHERS');
+
+                return [
+                    'client_id' => $row->client_id,
+                    'client_referenceNo' => $row->client_referenceNo,
+                    'client_name' => $row->client_name,
+                    'division' => $division,
+                    'status' => $row->ticket_status ?: 'New',
+                    'type' => $row->ticket_type ?: 'Technical Support',
+                    'nature' => $row->ticket_nature_of_support ?: $row->ticket_support_type ?: '',
+                    'problem' => $row->ticket_problem_that_needed_support ?: '',
+                    'assigned_staff' => $row->ticket_assigned_staff ?: null,
+                    'date_requested' => $row->date_requested ?: $row->created_at,
+                ];
+            })
+            ->values();
+
+        return response()->json([
+            'results' => $rows,
+            'total' => $total,
         ]);
     }
 }

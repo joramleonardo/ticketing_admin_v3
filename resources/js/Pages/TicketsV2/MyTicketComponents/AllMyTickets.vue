@@ -251,6 +251,141 @@ function setPresetFilter(preset) {
 }
 
 const showPresetsMenu = ref(false)
+const showDateRangeMenu = ref(false)
+
+// ── Date Filter & Horizons State ─────────────────────────────────────────────
+const yearFilter = ref(
+  String(new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('year') ?? props.filters?.year ?? '')
+)
+const datePreset = ref(
+  new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('date_preset') ?? (props.filters?.date_preset ?? '')
+)
+const dateFrom = ref(
+  new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('date_from') ?? (props.filters?.date_from ?? '')
+)
+const dateTo = ref(
+  new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('date_to') ?? (props.filters?.date_to ?? '')
+)
+
+const now = new Date()
+const thisYear = now.getFullYear()
+const firstYear = 2020
+const YEAR_OPTIONS = [{ value: '', label: 'All Years' }].concat(
+  Array.from({ length: thisYear - firstYear + 1 }, (_, i) => {
+    const y = thisYear - i
+    return { value: String(y), label: String(y) }
+  })
+)
+
+function getInitialMonths() {
+  const sp = new URLSearchParams(typeof location !== 'undefined' ? location.search : '')
+  const mCsv = sp.get('months') ?? props.filters?.months ?? ''
+  if (mCsv) {
+    return String(mCsv).split(',').map((v) => v.trim()).filter(Boolean)
+  }
+  const q = sp.get('quarter') ?? props.filters?.quarter ?? ''
+  const qMap = { Q1: ['1', '2', '3'], Q2: ['4', '5', '6'], Q3: ['7', '8', '9'], Q4: ['10', '11', '12'] }
+  if (q && qMap[q]) return qMap[q]
+  const singleM = sp.get('month') ?? props.filters?.month ?? ''
+  if (singleM) return [String(singleM)]
+  return []
+}
+
+const monthsSelected = ref(getInitialMonths())
+const monthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+]
+const monthNums = Array.from({ length: 12 }, (_, i) => i + 1)
+const selectedMonthsSet = computed(() => new Set(monthsSelected.value.map((v) => Number(v))))
+
+function toggleMonthValue(n) {
+  const s = new Set(monthsSelected.value)
+  const k = String(n)
+  if (s.has(k)) s.delete(k)
+  else s.add(k)
+  monthsSelected.value = Array.from(s)
+}
+function selectAllMonths() { monthsSelected.value = monthNums.map((n) => String(n)) }
+function clearMonths() { monthsSelected.value = [] }
+function selectQuarter(q) {
+  const map = { 1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12] }
+  monthsSelected.value = (map[q] || []).map((n) => String(n))
+}
+
+const selectedMonthNames = computed(() => {
+  const s = new Set(monthsSelected.value.map((v) => Number(v)))
+  return monthNums.filter((n) => s.has(n)).map((n) => monthNames[n - 1])
+})
+
+const monthsSummary = computed(() => {
+  if (!monthsSelected.value.length) return 'All months'
+  const list = selectedMonthNames.value
+  return list.length > 3 ? `${list.slice(0, 3).join(', ')} +${list.length - 3} more` : list.join(', ')
+})
+
+function detectQuarterFromSet(set) {
+  const quarters = [
+    { key: 'Q1', range: [1, 2, 3] },
+    { key: 'Q2', range: [4, 5, 6] },
+    { key: 'Q3', range: [7, 8, 9] },
+    { key: 'Q4', range: [10, 11, 12] },
+  ]
+  for (const { key, range } of quarters) {
+    if (range.every((m) => set.has(m)) && set.size === 3) return key
+  }
+  return null
+}
+
+function setDatePreset(p) {
+  if (datePreset.value === p) {
+    datePreset.value = ''
+    dateFrom.value = ''
+    dateTo.value = ''
+  } else {
+    datePreset.value = p
+    dateFrom.value = ''
+    dateTo.value = ''
+  }
+  fetchTickets(1)
+}
+
+function onCustomDateChange() {
+  datePreset.value = 'custom'
+  fetchTickets(1)
+}
+
+const dateRangeSummary = computed(() => {
+  if (datePreset.value === 'today') return 'Today'
+  if (datePreset.value === 'yesterday') return 'Yesterday'
+  if (datePreset.value === 'last_7_days') return 'Last 7 Days'
+  if (datePreset.value === 'this_month') return 'This Month'
+  if (dateFrom.value || dateTo.value) {
+    if (dateFrom.value && dateTo.value) return `${dateFrom.value} → ${dateTo.value}`
+    if (dateFrom.value) return `From ${dateFrom.value}`
+    if (dateTo.value) return `Until ${dateTo.value}`
+  }
+  if (monthsSelected.value.length || yearFilter.value) {
+    const parts = []
+    if (monthsSelected.value.length) parts.push(monthsSummary.value)
+    if (yearFilter.value) parts.push(yearFilter.value)
+    return parts.join(' • ')
+  }
+  return 'All Dates'
+})
+
+const isDateFilterActive = computed(() => {
+  return !!(datePreset.value || dateFrom.value || dateTo.value || monthsSelected.value.length || yearFilter.value)
+})
+
+function clearDateFilters() {
+  datePreset.value = ''
+  dateFrom.value = ''
+  dateTo.value = ''
+  monthsSelected.value = []
+  yearFilter.value = ''
+  fetchTickets(1)
+}
 
 const activePresetLabel = computed(() => {
   const found = presetTabs.value.find(p => p.value === presetFilter.value)
@@ -267,9 +402,35 @@ const hasActiveFilters = computed(() => {
     (searchText.value && searchText.value.trim()) ||
     statusFilter.value ||
     divisionFilter.value ||
-    presetFilter.value
+    presetFilter.value ||
+    isDateFilterActive.value
   )
 })
+
+function appendDateParams(params) {
+  const yr = (yearFilter.value || '').trim()
+  if (yr) params.set('year', yr)
+  const dp = (datePreset.value || '').trim()
+  if (dp) params.set('date_preset', dp)
+  const df = (dateFrom.value || '').trim()
+  if (df) params.set('date_from', df)
+  const dt = (dateTo.value || '').trim()
+  if (dt) params.set('date_to', dt)
+
+  const set = selectedMonthsSet.value
+  if (set.size === 1) {
+    const [m] = Array.from(set)
+    params.set('month', String(m))
+  } else if (set.size > 1) {
+    const q = detectQuarterFromSet(set)
+    if (q) {
+      params.set('quarter', q)
+    } else {
+      const csv = Array.from(set).sort((a, b) => a - b).join(',')
+      params.set('months', csv)
+    }
+  }
+}
 
 // ── Export URL for current view ──────────────────────────────────────────────
 const exportUrl = computed(() => {
@@ -278,6 +439,7 @@ const exportUrl = computed(() => {
   if (statusFilter.value) params.set('status', statusFilter.value)
   if (divisionFilter.value) params.set('division', divisionFilter.value)
   if (presetFilter.value) params.set('preset', presetFilter.value)
+  appendDateParams(params)
   const qs = params.toString()
   return qs ? `/admin/my-tickets/export?${qs}` : '/admin/my-tickets/export'
 })
@@ -294,6 +456,7 @@ const buildUrl = (page = 1) => {
   if (dv) params.set('division', dv)
   const pr = (presetFilter.value || '').trim()
   if (pr) params.set('preset', pr)
+  appendDateParams(params)
   return `${BASE_PATH}?${params.toString()}`
 }
 
@@ -365,22 +528,34 @@ const clearFilters = () => {
   statusFilter.value = ''
   divisionFilter.value = ''
   presetFilter.value = ''
+  datePreset.value = ''
+  dateFrom.value = ''
+  dateTo.value = ''
+  monthsSelected.value = []
+  yearFilter.value = ''
   fetchTickets(1)
 }
 
 // ── Click Outside Directive ──────────────────────────────────────────────────
 const vClickOutside = {
   beforeMount(el, binding) {
+    el.__coCallback = binding.value
     el.__co = (e) => {
-      if (!(el === e.target || el.contains(e.target))) binding.value(e)
+      if (!(el === e.target || el.contains(e.target))) {
+        el.__coCallback?.(e)
+      }
     }
     document.addEventListener('mousedown', el.__co)
     document.addEventListener('touchstart', el.__co)
+  },
+  updated(el, binding) {
+    el.__coCallback = binding.value
   },
   unmounted(el) {
     document.removeEventListener('mousedown', el.__co)
     document.removeEventListener('touchstart', el.__co)
     delete el.__co
+    delete el.__coCallback
   },
 }
 
@@ -624,13 +799,14 @@ defineExpose({
   statusFilter,
   setPresetFilter,
   presetFilter,
+  exportUrl,
 })
 </script>
 
 <template>
-  <div class="relative flex flex-col min-w-0 break-words bg-white w-full shadow-sm rounded-2xl border border-slate-200 overflow-hidden">
+  <div class="relative flex flex-col min-w-0 break-words bg-white w-full shadow-sm rounded-2xl border border-slate-200">
     <!-- ── Card Top Header ─────────────────────────────────────────────── -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-200 gap-3 bg-white">
+    <div class="relative z-40 rounded-t-2xl flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-200 gap-3 bg-white">
       <div>
         <h3 class="font-bold text-base text-slate-900 tracking-tight flex items-center gap-2">
           <i class="fa-solid fa-list-check text-blue-600"></i>
@@ -683,7 +859,7 @@ defineExpose({
           <!-- Dropdown Menu -->
           <div
             v-if="showCreateMenu"
-            class="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-40 divide-y divide-slate-100"
+            class="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 divide-y divide-slate-100"
           >
             <div class="py-1">
               <button
@@ -732,7 +908,7 @@ defineExpose({
     </div>
 
     <!-- ── Option A: Segmented Status Control Bar & Workflow Presets ────── -->
-    <div class="bg-slate-50/70 border-b border-slate-200 px-5 py-2.5 relative z-20">
+    <div class="bg-slate-50/70 border-b border-slate-200 px-5 py-2.5 relative z-30">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-0.5">
         <!-- Sleek Segmented Capsule Tabs (Linear / GitHub style) -->
         <div class="inline-flex items-center p-1 bg-slate-200/70 rounded-xl gap-0.5 overflow-x-auto shrink-0 select-none max-w-full">
@@ -825,10 +1001,10 @@ defineExpose({
     </div>
 
     <!-- ── Option A: Unified 1-Row Filters Toolbar ─────────────────── -->
-    <div class="p-4 border-b border-slate-200 bg-white relative z-10">
-      <div class="flex flex-col sm:flex-row sm:items-center gap-2.5">
+    <div class="p-4 border-b border-slate-200 bg-white relative z-20">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2.5 flex-wrap md:flex-nowrap">
         <!-- Search Input (expands to fill space) -->
-        <div class="relative flex-1 min-w-[200px]">
+        <div class="relative flex-1 min-w-[180px]">
           <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
             <i class="fa-solid fa-magnifying-glass text-xs"></i>
           </div>
@@ -851,7 +1027,7 @@ defineExpose({
         </div>
 
         <!-- Division Dropdown -->
-        <div class="w-full sm:w-48 shrink-0">
+        <div class="w-full sm:w-40 shrink-0">
           <div class="relative">
             <select
               v-model="divisionFilter"
@@ -868,6 +1044,169 @@ defineExpose({
             </div>
             <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
               <i class="fa-solid fa-chevron-down text-[10px]"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Unified Date Range Popover Button -->
+        <div class="relative w-full sm:w-44 shrink-0" v-click-outside="() => (showDateRangeMenu = false)">
+          <button
+            type="button"
+            @click="showDateRangeMenu = !showDateRangeMenu"
+            class="w-full h-9 px-3 rounded-xl border text-xs font-medium inline-flex items-center justify-between gap-1.5 transition cursor-pointer"
+            :class="isDateFilterActive
+              ? 'bg-blue-50/50 border-blue-300 text-blue-900 font-semibold ring-1 ring-blue-500/20'
+              : 'bg-slate-50/50 border-slate-300 text-slate-700 hover:bg-white hover:text-slate-900'"
+            aria-haspopup="true"
+            :aria-expanded="showDateRangeMenu ? 'true' : 'false'"
+            title="Filter tickets by date range or horizon"
+          >
+            <span class="inline-flex items-center gap-1.5 truncate">
+              <i class="fa-regular fa-calendar-days text-xs" :class="isDateFilterActive ? 'text-blue-600' : 'text-slate-400'"></i>
+              <span class="truncate">{{ dateRangeSummary }}</span>
+            </span>
+            <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0 transition-transform" :class="{ 'rotate-180': showDateRangeMenu }"></i>
+          </button>
+
+          <!-- Comprehensive Date Range Dropdown Popover -->
+          <div
+            v-if="showDateRangeMenu"
+            class="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-[380px] max-w-[95vw] rounded-2xl border border-slate-200 bg-white shadow-2xl p-4 z-50"
+          >
+            <!-- Header -->
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div class="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                <i class="fa-regular fa-calendar-days text-blue-600"></i>
+                <span>Date Filter & Horizons</span>
+              </div>
+              <button
+                v-if="isDateFilterActive"
+                type="button"
+                @click="clearDateFilters"
+                class="text-[11px] font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer"
+              >
+                Reset dates
+              </button>
+            </div>
+
+            <!-- Quick Horizon Presets -->
+            <div class="py-3 border-b border-slate-100">
+              <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                Quick Horizons
+              </label>
+              <div class="grid grid-cols-4 gap-1.5">
+                <button
+                  type="button"
+                  @click="setDatePreset('today')"
+                  class="px-2 py-1.5 rounded-lg text-xs font-medium border text-center transition cursor-pointer"
+                  :class="datePreset === 'today' ? 'bg-blue-900 border-blue-900 text-white font-bold' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  @click="setDatePreset('yesterday')"
+                  class="px-2 py-1.5 rounded-lg text-xs font-medium border text-center transition cursor-pointer"
+                  :class="datePreset === 'yesterday' ? 'bg-blue-900 border-blue-900 text-white font-bold' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                >
+                  Yesterday
+                </button>
+                <button
+                  type="button"
+                  @click="setDatePreset('last_7_days')"
+                  class="px-2 py-1.5 rounded-lg text-xs font-medium border text-center transition cursor-pointer"
+                  :class="datePreset === 'last_7_days' ? 'bg-blue-900 border-blue-900 text-white font-bold' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                >
+                  Last 7 Days
+                </button>
+                <button
+                  type="button"
+                  @click="setDatePreset('this_month')"
+                  class="px-2 py-1.5 rounded-lg text-xs font-medium border text-center transition cursor-pointer"
+                  :class="datePreset === 'this_month' ? 'bg-blue-900 border-blue-900 text-white font-bold' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                >
+                  This Month
+                </button>
+              </div>
+            </div>
+
+            <!-- Custom Date Range (From / To) -->
+            <div class="py-3 border-b border-slate-100">
+              <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                Custom Date Range
+              </label>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <span class="block text-[10px] text-slate-500 font-medium mb-0.5">From Date:</span>
+                  <input
+                    type="date"
+                    v-model="dateFrom"
+                    @change="onCustomDateChange"
+                    class="w-full h-8 text-xs rounded-lg border-slate-300 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 px-2 py-0 bg-slate-50/50 hover:bg-white"
+                  />
+                </div>
+                <div>
+                  <span class="block text-[10px] text-slate-500 font-medium mb-0.5">To Date:</span>
+                  <input
+                    type="date"
+                    v-model="dateTo"
+                    @change="onCustomDateChange"
+                    class="w-full h-8 text-xs rounded-lg border-slate-300 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 px-2 py-0 bg-slate-50/50 hover:bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Months & Year Filter -->
+            <div class="pt-3">
+              <div class="flex items-center justify-between mb-1.5">
+                <label class="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  By Months & Year
+                </label>
+                <select
+                  v-model="yearFilter"
+                  @change="fetchTickets(1)"
+                  class="h-6 text-[11px] font-semibold rounded-md border-slate-200 bg-slate-50 px-1 py-0 text-slate-700 cursor-pointer"
+                >
+                  <option v-for="opt in YEAR_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+              </div>
+
+              <!-- Quarter Shortcuts -->
+              <div class="flex items-center gap-1 mb-2 flex-wrap">
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="selectQuarter(1)">Q1</button>
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="selectQuarter(2)">Q2</button>
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="selectQuarter(3)">Q3</button>
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="selectQuarter(4)">Q4</button>
+                <span class="flex-1"></span>
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="selectAllMonths()">All</button>
+                <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer" @click="clearMonths()">Clear</button>
+              </div>
+
+              <!-- 12 Months Grid -->
+              <div class="grid grid-cols-4 gap-1">
+                <button
+                  v-for="n in 12"
+                  :key="'pop-m-btn-' + n"
+                  type="button"
+                  class="text-[11px] py-1 border rounded text-center transition cursor-pointer"
+                  :class="selectedMonthsSet.has(n) ? 'bg-blue-100 border-blue-400 font-bold text-blue-900' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                  @click="toggleMonthValue(n)"
+                >
+                  {{ monthNames[n - 1].substring(0, 3) }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Popover Footer -->
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-900 text-white hover:bg-blue-800 transition cursor-pointer"
+                @click="showDateRangeMenu = false; fetchTickets(1)"
+              >
+                Apply Date Filter
+              </button>
             </div>
           </div>
         </div>
@@ -923,6 +1262,15 @@ defineExpose({
             </button>
           </span>
 
+          <!-- Date Range Chip -->
+          <span v-if="isDateFilterActive" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-300 text-xs font-medium shadow-2xs">
+            <i class="fa-regular fa-calendar-days text-[11px] text-slate-500"></i>
+            <span>Date: <strong>{{ dateRangeSummary }}</strong></span>
+            <button type="button" class="text-slate-400 hover:text-rose-600 hover:bg-slate-200 rounded p-0.5 transition inline-flex items-center justify-center cursor-pointer" @click="clearDateFilters" title="Remove date filter">
+              <i class="fa-solid fa-xmark text-xs"></i>
+            </button>
+          </span>
+
           <!-- Search Chip -->
           <span v-if="searchText" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-300 text-xs font-medium shadow-2xs">
             <span>Search: <strong>"{{ searchText }}"</strong></span>
@@ -950,7 +1298,7 @@ defineExpose({
     </div>
 
     <!-- ── Main Table ──────────────────────────────────────────────────── -->
-    <div class="block w-full overflow-x-auto">
+    <div class="relative z-10 block w-full overflow-x-auto">
       <table class="items-center w-full bg-transparent border-collapse">
         <thead>
           <tr
@@ -1197,10 +1545,10 @@ defineExpose({
               </div>
               <p class="text-xs font-semibold text-slate-700">No tickets found</p>
               <p class="text-[11px] text-slate-400 mt-0.5">
-                {{ searchText || statusFilter || divisionFilter ? 'Try clearing or adjusting your active filters' : 'You have no tickets assigned in this category' }}
+                {{ hasActiveFilters ? 'Try clearing or adjusting your active filters' : 'You have no tickets assigned in this category' }}
               </p>
               <button
-                v-if="searchText || statusFilter || divisionFilter"
+                v-if="hasActiveFilters"
                 @click="clearFilters"
                 class="mt-3 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
               >
@@ -1214,7 +1562,7 @@ defineExpose({
     </div>
 
     <!-- ── Pagination Footer ───────────────────────────────────────────── -->
-    <div class="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
+    <div class="rounded-b-2xl px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
       <div class="flex items-center gap-3">
         <label class="text-slate-500">Rows per page:</label>
         <select

@@ -1,10 +1,9 @@
 <script setup>
-import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { router, usePage } from '@inertiajs/vue3'
 import Modal from '@/Components/Modal.vue'
 import ModalAction_CreateTicket from '@/Pages/TicketsV2/ModalComponents/ModalAction_CreateTicket.vue'
 import ModalTicketDetails from '@/Pages/TicketsV2/ModalComponents/ModalTicketDetails.vue'
-import DeleteTicketButton from '@/Pages/TicketsV2/ModalComponents/ModalAction_DeleteTicket.vue'
 import TicketMessageThread from '@/Components/TicketMessageThread.vue'
 import { useToast } from 'vue-toastification'
 import { useStaffList } from '@/Composables/useStaffList'
@@ -29,7 +28,7 @@ const REQUEST_TYPE_OPTIONS = [
 
 // ── User Identity & Role ──────────────────────────────────────────────────────
 const page = usePage()
-const isAdmin = computed(() => page.props?.auth?.user?.role === 'Admin')
+const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
 
 const props = defineProps({
   tickets: Object, // ← paginator returned by controller
@@ -141,26 +140,71 @@ function onWindowFocus() {
   }
 }
 
+function buildFilterParamsObj() {
+  const params = {}
+
+  const s = (searchText.value || '').trim()
+  if (s) params.search = s
+
+  const dv = (divisionFilter.value ?? '').toString().trim()
+  if (dv) params.division = dv
+
+  const yr = (yearFilter.value || '').trim()
+  if (yr) params.year = yr
+
+  const as = (assignedStaffFilter.value || '').trim()
+  if (as) params.assigned_staff = as
+
+  const dp = (datePreset.value || '').trim()
+  if (dp) params.date_preset = dp
+
+  const df = (dateFrom.value || '').trim()
+  if (df) params.date_from = df
+
+  const dt = (dateTo.value || '').trim()
+  if (dt) params.date_to = dt
+
+  const set = selectedMonthsSet.value
+  if (set.size === 1) {
+    const [m] = Array.from(set)
+    params.month = String(m)
+  } else if (set.size > 1) {
+    const q = detectQuarterFromSet(set)
+    if (q) {
+      params.quarter = q
+    } else {
+      params.months = Array.from(set).sort((a, b) => a - b).join(',')
+    }
+  }
+
+  return params
+}
+
 async function checkLiveUpdates(isFirst = false) {
-  if (!isDispatchLive.value || isCheckingUpdates.value) return
+  if (!isDispatchLive.value || isCheckingUpdates.value || isLoading.value) return
   isCheckingUpdates.value = true
 
   try {
     const isInitial = isFirst || (maxTicketId.value === 0 && maxMessageId.value === 0)
+    const filterParams = buildFilterParamsObj()
+    const filterSnapshot = JSON.stringify(filterParams)
+
     const params = {
       last_id: maxTicketId.value,
       last_message_id: maxMessageId.value,
       init: isInitial ? 1 : 0,
       include_counts: 1,
+      ...filterParams,
     }
 
     const { data } = await axios.get('/admin/tickets-v2/check-updates', { params })
+    const isSameFilterState = !isLoading.value && JSON.stringify(buildFilterParamsObj()) === filterSnapshot
 
     // On initial run, initialize IDs without playing alert
     if (isInitial) {
       maxTicketId.value = data.latest_id || 0
       maxMessageId.value = data.latest_message_id || 0
-      if (data.counts) {
+      if (data.counts && isSameFilterState) {
         counts.value = data.counts
       }
       isCheckingUpdates.value = false
@@ -174,7 +218,7 @@ async function checkLiveUpdates(isFirst = false) {
       maxMessageId.value = data.latest_message_id
     }
 
-    if (data.counts) {
+    if (data.counts && isSameFilterState) {
       counts.value = data.counts
     }
 
@@ -184,7 +228,17 @@ async function checkLiveUpdates(isFirst = false) {
       unreadIncomingCount.value += data.new_tickets.length
 
       const isViewingNewOrAll = !statusFilter.value || statusFilter.value === 'New'
-      const isFiltering = !!(searchText.value || divisionFilter.value || yearFilter.value || presetFilter.value || dateFrom.value)
+      const isFiltering = !!(
+        searchText.value ||
+        divisionFilter.value ||
+        yearFilter.value ||
+        assignedStaffFilter.value ||
+        presetFilter.value ||
+        datePreset.value ||
+        dateFrom.value ||
+        dateTo.value ||
+        monthsSelected.value.length
+      )
 
       data.new_tickets.forEach((newTicket) => {
         newTicket.isNewArrival = true
@@ -245,6 +299,7 @@ onMounted(() => {
   if (tickets.value.length > 0) {
     maxTicketId.value = Math.max(0, ...tickets.value.map((t) => Number(t.client_id ?? t.id ?? 0)))
   }
+  checkAutoOpenTicketRef()
   startDispatchMonitoring()
   if (typeof window !== 'undefined') {
     window.addEventListener('focus', onWindowFocus)
@@ -468,6 +523,19 @@ function isPresetActive(name) {
   return presetFilter.value === name
 }
 
+let isSyncingSearchFromProps = false
+
+function checkAutoOpenTicketRef() {
+  if (typeof window === 'undefined') return
+  const params = new URLSearchParams(window.location.search)
+  const openRef = (params.get('open_ref') || '').trim()
+  if (!openRef) return
+  const target = tickets.value.find((t) => t.client_referenceNo === openRef)
+  if (target) {
+    openModal(target, 'overview')
+  }
+}
+
 // Keep local state in sync when Inertia reloads props
 watch(
   () => props.tickets,
@@ -490,9 +558,25 @@ watch(
           selectedRow.value = fresh
         }
       }
+      checkAutoOpenTicketRef()
     }
   },
   { deep: true }
+)
+
+watch(
+  () => props.filters?.search,
+  (newSearch) => {
+    const incoming = newSearch ?? ''
+    if (incoming !== searchText.value) {
+      isSyncingSearchFromProps = true
+      clearTimeout(searchDebounceTimer)
+      searchText.value = incoming
+      nextTick(() => {
+        isSyncingSearchFromProps = false
+      })
+    }
+  }
 )
 
 watch(
@@ -608,7 +692,7 @@ const fetchTickets = (target = 1) => {
 // ── Live Debounced Search ─────────────────────────────────────────────────────
 let searchDebounceTimer = null
 watch(searchText, (newVal, oldVal) => {
-  if (newVal === oldVal) return
+  if (newVal === oldVal || isSyncingSearchFromProps) return
   clearTimeout(searchDebounceTimer)
   searchDebounceTimer = setTimeout(() => {
     fetchTickets(1)
@@ -765,16 +849,23 @@ function detectQuarterFromSet(set) {
 
 const vClickOutside = {
   beforeMount(el, binding) {
+    el.__coCallback = binding.value
     el.__co = (e) => {
-      if (!(el === e.target || el.contains(e.target))) binding.value(e)
+      if (!(el === e.target || el.contains(e.target))) {
+        el.__coCallback?.(e)
+      }
     }
     document.addEventListener('mousedown', el.__co)
     document.addEventListener('touchstart', el.__co)
+  },
+  updated(el, binding) {
+    el.__coCallback = binding.value
   },
   unmounted(el) {
     document.removeEventListener('mousedown', el.__co)
     document.removeEventListener('touchstart', el.__co)
     delete el.__co
+    delete el.__coCallback
   },
 }
 
@@ -850,6 +941,7 @@ const selectedRow = ref(null)
 const selectedIndex = ref(-1)
 const showDetailsModal = ref(false)
 const modalInitialTab = ref('overview')
+const modalInitialAction = ref(null)
 
 // ── Dropdown & Row Actions State ──────────────────────────────────────────────
 const showCreateMenu = ref(false)
@@ -911,18 +1003,12 @@ function closeRowMenu() {
 }
 
 function isNearBottom(index) {
-  return index >= (tickets.value.length - 2)
+  return tickets.value.length > 3 && index >= (tickets.value.length - 2)
 }
 
 function copyReferenceNumber(refNo) {
   if (!refNo) return
   copyTextToClipboard(refNo, `Reference #${refNo} copied to clipboard!`)
-}
-
-function copyTicketLink(refNo) {
-  if (!refNo) return
-  const url = `${window.location.origin}/admin/tickets-v2?search=${encodeURIComponent(refNo)}`
-  copyTextToClipboard(url, `Ticket link copied to clipboard!`)
 }
 
 function copyTextToClipboard(text, successMsg) {
@@ -954,7 +1040,7 @@ function fallbackCopy(text, successMsg) {
   }
 }
 
-function openModal(row, tab = 'overview') {
+function openModal(row, tab = 'overview', action = null) {
   if (row?.isNewArrival) {
     row.isNewArrival = false
   }
@@ -963,13 +1049,79 @@ function openModal(row, tab = 'overview') {
     (t) => (t?.client_id ?? t?.id) === (row?.client_id ?? row?.id)
   )
   modalInitialTab.value = tab
+  modalInitialAction.value = action
   showDetailsModal.value = true
+}
+
+function openEditModal(row) {
+  openModal(row, 'overview', 'edit')
 }
 
 function closeDetailsModal() {
   showDetailsModal.value = false
   selectedRow.value = null
   selectedIndex.value = -1
+  modalInitialAction.value = null
+}
+
+// Single Ticket Delete Modal
+const showSingleDeleteModal = ref(false)
+const ticketToDelete = ref(null)
+const isSingleDeleting = ref(false)
+const singleDeleteTypedRef = ref('')
+const singleDeleteInputRef = ref(null)
+
+const expectedDeleteRef = computed(() =>
+  String(
+    ticketToDelete.value?.client_referenceNo ||
+    ticketToDelete.value?.detail?.client_referenceNo ||
+    ticketToDelete.value?.client_id ||
+    ''
+  ).trim()
+)
+
+const canConfirmSingleDelete = computed(
+  () => Boolean(expectedDeleteRef.value) && singleDeleteTypedRef.value.trim() === expectedDeleteRef.value
+)
+
+function openSingleDeleteModal(ticket) {
+  if (!ticket) return
+  ticketToDelete.value = ticket
+  singleDeleteTypedRef.value = ''
+  showSingleDeleteModal.value = true
+  nextTick(() => singleDeleteInputRef.value?.focus?.())
+}
+
+function closeSingleDeleteModal() {
+  showSingleDeleteModal.value = false
+  ticketToDelete.value = null
+  singleDeleteTypedRef.value = ''
+}
+
+function submitSingleDelete() {
+  if (!ticketToDelete.value || !canConfirmSingleDelete.value || isSingleDeleting.value) return
+  const t = ticketToDelete.value
+  const id = t.client_id ?? t.id ?? t.client_referenceNo
+  const refNo = t.client_referenceNo || `#${id}`
+
+  isSingleDeleting.value = true
+  router.delete(`/admin/tickets-v2/${encodeURIComponent(id)}`, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`Ticket ${refNo} deleted successfully!`)
+      if (showDetailsModal.value && selectedRow.value?.client_referenceNo === t.client_referenceNo) {
+        closeDetailsModal()
+      }
+      closeSingleDeleteModal()
+      fetchTickets(pagination.value.current_page ?? 1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Failed to delete ticket.')
+    },
+    onFinish: () => {
+      isSingleDeleting.value = false
+    },
+  })
 }
 
 const hasPrevTicket = computed(() => selectedIndex.value > 0)
@@ -1025,6 +1177,7 @@ function onTicketDeleted({ id }) {
     (r) => (r?.client_id ?? r?.id ?? r?.detail?.ticket_id ?? null) === id
   )
   if (idx !== -1) tickets.value.splice(idx, 1)
+  fetchTickets(pagination.value.current_page ?? 1)
 }
 
 // ── Clickable Column Sorting ──────────────────────────────────────────────────
@@ -1298,6 +1451,7 @@ const hasActiveFilters = computed(() => {
 const showRightSidebar = ref(
   typeof window !== 'undefined' ? localStorage.getItem('ticket_sidebar_open') !== 'false' : true
 )
+const breakdownTab = ref('nature') // 'nature' | 'division'
 
 function toggleRightSidebar() {
   showRightSidebar.value = !showRightSidebar.value
@@ -1305,6 +1459,27 @@ function toggleRightSidebar() {
     localStorage.setItem('ticket_sidebar_open', showRightSidebar.value ? 'true' : 'false')
   }
 }
+
+const queueResolutionStats = computed(() => {
+  const total = Number(counts.value?.All ?? pagination.value?.total ?? 0)
+  const completed = Number(counts.value?.Completed ?? 0)
+  const closed = Number(counts.value?.Closed ?? 0)
+  const inProgress = Number(counts.value?.['In Progress'] ?? 0)
+  const pending = Number(counts.value?.Pending ?? 0)
+  const newCount = Number(counts.value?.New ?? 0)
+  const resolved = completed + closed
+  const rate = total > 0 ? Math.round((resolved / total) * 100) : 0
+
+  return {
+    total,
+    resolved,
+    rate,
+    resolvedPct: total > 0 ? Math.round((resolved / total) * 100) : 0,
+    inProgressPct: total > 0 ? Math.round((inProgress / total) * 100) : 0,
+    pendingPct: total > 0 ? Math.round((pending / total) * 100) : 0,
+    newPct: total > 0 ? Math.max(0, 100 - Math.round(((resolved + inProgress + pending) / total) * 100)) : 0,
+  }
+})
 
 function getStaffName(s) {
   if (!s) return ''
@@ -1314,19 +1489,61 @@ function getStaffName(s) {
 
 function getStaffInitial(s) {
   const name = getStaffName(s).trim()
-  return name ? name.charAt(0).toUpperCase() : '?'
+  if (!name) return '?'
+  const parts = name.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  }
+  return name.charAt(0).toUpperCase()
+}
+
+function getStaffStats(staffName) {
+  const cleanName = getStaffName(staffName).trim()
+  if (!cleanName) {
+    return { active: 0, in_progress: 0, pending: 0, resolved: 0, total: 0 }
+  }
+  const normalized = cleanName.toLowerCase()
+  const workloads = counts.value?.staff_workloads
+  if (workloads && typeof workloads === 'object') {
+    if (workloads[normalized]) {
+      return workloads[normalized]
+    }
+    const matchedKey = Object.keys(workloads).find(
+      (k) => k.includes(normalized) || normalized.includes(k)
+    )
+    if (matchedKey) {
+      return workloads[matchedKey]
+    }
+    return { active: 0, in_progress: 0, pending: 0, resolved: 0, total: 0 }
+  }
+
+  // Fallback to current page tickets if server aggregate is not present
+  const matching = tickets.value.filter((t) => {
+    const assigned = (t.detail?.ticket_assigned_staff || t.ticket_assigned_staff || '').toLowerCase().trim()
+    return assigned.includes(normalized)
+  })
+  const active = matching.filter((t) => {
+    const st = (t.detail?.ticket_status || t.ticket_status || '').toLowerCase().trim()
+    return !['completed', 'closed', 'cancelled'].includes(st)
+  }).length
+  return {
+    active,
+    in_progress: 0,
+    pending: 0,
+    resolved: matching.length - active,
+    total: matching.length,
+  }
 }
 
 function getStaffActiveCount(staffName) {
-  const cleanName = getStaffName(staffName)
-  if (!cleanName || !tickets.value.length) return 0
-  const normalized = cleanName.toLowerCase().trim()
-  return tickets.value.filter((t) => {
-    const assigned = (t.detail?.ticket_assigned_staff || t.ticket_assigned_staff || '').toLowerCase().trim()
-    const status = (t.detail?.ticket_status || t.ticket_status || '').toLowerCase().trim()
-    return assigned.includes(normalized) && !['completed', 'closed', 'cancelled'].includes(status)
-  }).length
+  return getStaffStats(staffName).active
 }
+
+const maxStaffActiveLoad = computed(() => {
+  if (!staffOptions.value?.length) return 1
+  const loads = staffOptions.value.map((s) => getStaffActiveCount(s))
+  return Math.max(1, ...loads)
+})
 
 function filterByStaff(staffValue) {
   if (assignedStaffFilter.value === staffValue) {
@@ -1338,29 +1555,100 @@ function filterByStaff(staffValue) {
 }
 const filterByTechnician = filterByStaff
 
+function filterByDivisionFromRail(divName) {
+  const reverseMap = {
+    FAD: '1',
+    IRAD: '2',
+    CRPD: '3',
+    'OD-MISPS': '4',
+    OTHERS: 'OTHERS',
+  }
+  const code = reverseMap[divName] || divName
+  if (String(divisionFilter.value) === String(code)) {
+    divisionFilter.value = ''
+  } else {
+    divisionFilter.value = code
+  }
+  fetchTickets(1)
+}
+
+function isDivisionSelectedInRail(divName) {
+  const reverseMap = {
+    FAD: '1',
+    IRAD: '2',
+    CRPD: '3',
+    'OD-MISPS': '4',
+    OTHERS: 'OTHERS',
+  }
+  const code = reverseMap[divName] || divName
+  return String(divisionFilter.value) === String(code)
+}
+
+const BREAKDOWN_PALETTE = [
+  { bg: 'bg-blue-600', dot: 'bg-blue-600' },
+  { bg: 'bg-emerald-500', dot: 'bg-emerald-500' },
+  { bg: 'bg-purple-500', dot: 'bg-purple-500' },
+  { bg: 'bg-amber-500', dot: 'bg-amber-500' },
+  { bg: 'bg-rose-500', dot: 'bg-rose-500' },
+  { bg: 'bg-teal-500', dot: 'bg-teal-500' },
+]
+
 const natureDistribution = computed(() => {
+  const serverList = counts.value?.nature_breakdown
+  if (Array.isArray(serverList) && serverList.length > 0) {
+    const total = serverList.reduce((acc, item) => acc + Number(item.count || 0), 0) || 1
+    return serverList.map((item, i) => ({
+      name: item.name,
+      count: Number(item.count || 0),
+      pct: Math.max(2, Math.round((Number(item.count || 0) / total) * 100)),
+      color: BREAKDOWN_PALETTE[i % BREAKDOWN_PALETTE.length],
+    }))
+  }
+
   if (!tickets.value.length) return []
   const countsMap = {}
   tickets.value.forEach((t) => {
-    const nature = t.detail?.ticket_nature_of_support || t.ticket_nature_of_support || 'Troubleshooting'
+    const nature = t.detail?.ticket_nature_of_support || t.ticket_nature_of_support || 'Unspecified'
     countsMap[nature] = (countsMap[nature] || 0) + 1
   })
   const total = tickets.value.length
-  const palette = [
-    { bg: 'bg-blue-500', dot: 'bg-blue-500' },
-    { bg: 'bg-emerald-500', dot: 'bg-emerald-500' },
-    { bg: 'bg-purple-500', dot: 'bg-purple-500' },
-    { bg: 'bg-amber-500', dot: 'bg-amber-500' },
-    { bg: 'bg-rose-500', dot: 'bg-rose-500' },
-  ]
   return Object.entries(countsMap)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .slice(0, 6)
     .map(([name, count], i) => ({
       name,
       count,
       pct: Math.max(4, Math.round((count / total) * 100)),
-      color: palette[i % palette.length],
+      color: BREAKDOWN_PALETTE[i % BREAKDOWN_PALETTE.length],
+    }))
+})
+
+const divisionDistribution = computed(() => {
+  const serverList = counts.value?.division_breakdown
+  if (Array.isArray(serverList) && serverList.length > 0) {
+    const total = serverList.reduce((acc, item) => acc + Number(item.count || 0), 0) || 1
+    return serverList.map((item, i) => ({
+      name: item.name,
+      count: Number(item.count || 0),
+      pct: Math.max(2, Math.round((Number(item.count || 0) / total) * 100)),
+      color: BREAKDOWN_PALETTE[i % BREAKDOWN_PALETTE.length],
+    }))
+  }
+
+  if (!tickets.value.length) return []
+  const countsMap = {}
+  tickets.value.forEach((t) => {
+    const div = mapDivision(t.client_division_agency)
+    countsMap[div] = (countsMap[div] || 0) + 1
+  })
+  const total = tickets.value.length
+  return Object.entries(countsMap)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count], i) => ({
+      name,
+      count,
+      pct: Math.max(4, Math.round((count / total) * 100)),
+      color: BREAKDOWN_PALETTE[i % BREAKDOWN_PALETTE.length],
     }))
 })
 </script>
@@ -1373,7 +1661,7 @@ const natureDistribution = computed(() => {
       <div class="flex-1 min-w-0 w-full transition-all duration-300">
         <div class="relative flex flex-col min-w-0 break-words bg-white w-full mb-6 shadow-md rounded-2xl border border-slate-200 overflow-hidden">
     <!-- ── Top Header Section ────────────────────────────────────────── -->
-    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white">
+    <div class="relative z-40 flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white">
       <div>
         <h3 class="font-bold text-lg text-slate-900 tracking-tight">
           All Tickets
@@ -1564,7 +1852,7 @@ const natureDistribution = computed(() => {
     </div>
 
     <!-- ── Option A: Segmented Status Control Bar & Workflow Presets ────── -->
-    <div class="bg-slate-50/70 border-b border-slate-200 px-6 py-2.5 relative z-20">
+    <div class="bg-slate-50/70 border-b border-slate-200 px-6 py-2.5 relative z-30">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-0.5">
         <!-- Sleek Segmented Capsule Tabs (Linear / GitHub style) -->
         <div class="inline-flex items-center p-1 bg-slate-200/70 rounded-xl gap-0.5 overflow-x-auto shrink-0 select-none max-w-full">
@@ -1701,9 +1989,9 @@ const natureDistribution = computed(() => {
       </div>
     </div>
 
-    <div class="block w-full overflow-x-auto p-6">
+    <div class="block w-full p-6">
       <!-- ── Option A: Unified 1-Row Filters Toolbar ─────────────────── -->
-      <div class="mb-5 bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-xs relative z-10">
+      <div class="mb-5 bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-xs relative z-20">
         <div class="flex flex-col md:flex-row md:items-center gap-2.5">
           <!-- Search Input (expands to fill space) -->
           <div class="relative flex-1 min-w-[220px]">
@@ -2051,6 +2339,7 @@ const natureDistribution = computed(() => {
 
         <div class="flex items-center gap-2 flex-wrap">
           <button
+            v-if="isAdmin"
             type="button"
             @click="openBulkAssignModal"
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition cursor-pointer border border-white/10"
@@ -2091,7 +2380,7 @@ const natureDistribution = computed(() => {
       </div>
 
       <!-- ── Table Container ─────────────────────────────────────────── -->
-      <div class="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm max-h-[calc(100vh-210px)] overflow-y-auto">
+      <div class="relative z-10 rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm max-h-[calc(100vh-210px)] overflow-x-auto overflow-y-auto">
         <table class="w-full text-left border-collapse">
           <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur shadow-xs">
             <tr class="bg-slate-50/95 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider select-none">
@@ -2347,7 +2636,7 @@ const natureDistribution = computed(() => {
                   <span class="truncate max-w-[130px]">{{ ticket.detail.ticket_assigned_staff }}</span>
                 </span>
                 <button
-                  v-else
+                  v-else-if="isAdmin"
                   type="button"
                   @click="openQuickAssign(ticket)"
                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition cursor-pointer"
@@ -2356,6 +2645,13 @@ const natureDistribution = computed(() => {
                   <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
                   <span>Unassigned</span>
                 </button>
+                <span
+                  v-else
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                  <span>Unassigned</span>
+                </span>
               </td>
 
               <!-- Requested Date -->
@@ -2408,10 +2704,10 @@ const natureDistribution = computed(() => {
               <!-- Actions (Role-Focused: Dispatch & Management) -->
               <td v-if="columns.actions" :class="isCompact ? 'px-4 py-2 text-right' : 'px-6 py-3.5 text-right'" @click.stop>
                 <div class="inline-flex items-center gap-1.5 justify-end">
-                  <!-- 1. Primary Contextual Action Button (Only Staff Assignment allowed, NO status changing) -->
-                  <!-- If New / Unassigned: Quick Assign to Staff -->
+                  <!-- 1. Primary Contextual Action Button (Only Staff Assignment allowed for Admins, NO status changing) -->
+                  <!-- If Admin & New / Unassigned: Quick Assign to Staff -->
                   <button
-                    v-if="ticket.detail?.ticket_status === 'New' || !ticket.detail?.ticket_assigned_staff"
+                    v-if="isAdmin && (ticket.detail?.ticket_status === 'New' || !ticket.detail?.ticket_assigned_staff)"
                     type="button"
                     @click.stop="openQuickAssign(ticket)"
                     class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
@@ -2421,9 +2717,9 @@ const natureDistribution = computed(() => {
                     <span class="hidden md:inline">Assign</span>
                   </button>
 
-                  <!-- If Pending / In Progress: Quick Reassign Staff -->
+                  <!-- If Admin & Pending / In Progress: Quick Reassign Staff -->
                   <button
-                    v-else-if="ticket.detail?.ticket_status === 'Pending' || ticket.detail?.ticket_status === 'In Progress'"
+                    v-else-if="isAdmin && (ticket.detail?.ticket_status === 'Pending' || ticket.detail?.ticket_status === 'In Progress')"
                     type="button"
                     @click.stop="openQuickAssign(ticket)"
                     class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition shadow-2xs cursor-pointer"
@@ -2433,7 +2729,7 @@ const natureDistribution = computed(() => {
                     <span class="hidden md:inline">Reassign</span>
                   </button>
 
-                  <!-- If Completed / Closed: View Details (No status changing) -->
+                  <!-- If Completed / Closed OR Staff: View Details (No status changing) -->
                   <button
                     v-else
                     type="button"
@@ -2446,7 +2742,10 @@ const natureDistribution = computed(() => {
                   </button>
 
                   <!-- 2. More Actions ('···') Dropdown Menu (Strictly Non-Redundant & Non-Status) -->
-                  <div class="relative inline-block text-left" v-click-outside="closeRowMenu">
+                  <div
+                    class="relative inline-block text-left"
+                    v-click-outside="() => { if (activeRowMenuId === getTicketKey(ticket)) closeRowMenu() }"
+                  >
                     <button
                       type="button"
                       @click.stop="toggleRowMenu(getTicketKey(ticket))"
@@ -2460,13 +2759,15 @@ const natureDistribution = computed(() => {
                     <!-- Dropdown Popover -->
                     <div
                       v-if="activeRowMenuId === getTicketKey(ticket)"
+                      @click.stop
                       class="absolute right-0 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-40 divide-y divide-slate-100"
                       :class="isNearBottom(index) ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
                     >
                       <div class="py-1">
                         <button
+                          v-if="isAdmin"
                           type="button"
-                          @click="openQuickAssign(ticket); closeRowMenu()"
+                          @click.stop="openQuickAssign(ticket); closeRowMenu()"
                           class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-2.5 transition cursor-pointer"
                         >
                           <i class="fa-solid fa-user-gear text-slate-400 w-3.5 text-center"></i>
@@ -2474,50 +2775,42 @@ const natureDistribution = computed(() => {
                         </button>
                         <button
                           type="button"
-                          @click="openModal(ticket, 'overview'); closeRowMenu()"
+                          @click.stop="openModal(ticket, 'overview'); closeRowMenu()"
                           class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                         >
                           <i class="fa-regular fa-eye text-slate-400 w-3.5 text-center"></i>
                           <span>View Details</span>
+                        </button>
+                        <button
+                          type="button"
+                          @click.stop="openEditModal(ticket); closeRowMenu()"
+                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                        >
+                          <i class="fa-solid fa-pen-to-square text-slate-400 w-3.5 text-center"></i>
+                          <span>Edit Ticket</span>
                         </button>
                       </div>
 
                       <div class="py-1">
                         <button
                           type="button"
-                          @click="copyReferenceNumber(ticket.client_referenceNo); closeRowMenu()"
+                          @click.stop="copyReferenceNumber(ticket.client_referenceNo); closeRowMenu()"
                           class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                         >
                           <i class="fa-regular fa-copy text-slate-400 w-3.5 text-center"></i>
                           <span>Copy Reference No.</span>
                         </button>
-                        <button
-                          type="button"
-                          @click="copyTicketLink(ticket.client_referenceNo); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <i class="fa-solid fa-link text-slate-400 w-3.5 text-center"></i>
-                          <span>Copy Ticket Link</span>
-                        </button>
                       </div>
 
                       <div v-if="isAdmin" class="py-1">
-                        <DeleteTicketButton
-                          :ticket="ticket"
-                          :is-admin="isAdmin"
-                          @deleted="onTicketDeleted"
+                        <button
+                          type="button"
+                          @click.stop="openSingleDeleteModal(ticket); closeRowMenu()"
+                          class="w-full text-left px-3.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                         >
-                          <template #trigger="{ open }">
-                            <button
-                              type="button"
-                              @click="open(); closeRowMenu()"
-                              class="w-full text-left px-3.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                            >
-                              <i class="fa-regular fa-trash-can text-rose-500 w-3.5 text-center"></i>
-                              <span>Delete Ticket</span>
-                            </button>
-                          </template>
-                        </DeleteTicketButton>
+                          <i class="fa-regular fa-trash-can text-rose-500 w-3.5 text-center"></i>
+                          <span>Delete Ticket</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2598,18 +2891,19 @@ const natureDistribution = computed(() => {
     <!-- ── RIGHT COLUMN: GITHUB "ABOUT & QUEUE INSIGHTS" RAIL ──────────────── -->
     <aside
       v-if="showRightSidebar"
-      class="w-full xl:w-80 shrink-0 space-y-6"
+      class="w-full xl:w-80 shrink-0 space-y-5"
     >
-      <!-- 1. ABOUT & QUEUE HEALTH -->
+      <!-- 1. QUEUE HEALTH & TRIAGE INSIGHTS -->
       <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
         <div class="flex items-center justify-between pb-3 border-b border-slate-100">
           <div class="flex items-center gap-2">
-            <span class="text-xs font-bold uppercase tracking-wider text-slate-800">About</span>
+            <span class="w-2 h-2 rounded-full bg-blue-600"></span>
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-800">Queue Health & Triage</span>
           </div>
           <button
             type="button"
             @click="toggleRightSidebar"
-            class="text-slate-400 hover:text-slate-600 p-1 rounded-md transition"
+            class="text-slate-400 hover:text-slate-600 p-1 rounded-md hover:bg-slate-100 transition cursor-pointer"
             title="Collapse sidebar"
           >
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2618,34 +2912,121 @@ const natureDistribution = computed(() => {
           </button>
         </div>
 
-        <p class="text-xs text-slate-500 mt-3 leading-relaxed">
-          Central support queue triage, IT staff allocation, and SLA compliance monitoring.
-        </p>
-
-        <!-- Key Metrics List (GitHub repo-style metadata) -->
-        <div class="mt-4 space-y-2.5 text-xs">
-          <!-- Total Volume -->
-          <div class="flex items-center justify-between text-slate-600">
-            <span class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-              <span>Queue Volume</span>
-            </span>
-            <span class="font-bold text-slate-900">{{ counts.All || pagination.total || tickets.length }}</span>
+        <!-- Resolution Rate Summary Box -->
+        <div class="mt-3.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-semibold text-slate-700">Resolution Rate</span>
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] text-slate-500">
+                {{ queueResolutionStats.resolved }} / {{ queueResolutionStats.total }}
+              </span>
+              <span
+                class="font-bold px-2 py-0.5 rounded-full text-[11px] border"
+                :class="queueResolutionStats.rate >= 75
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : queueResolutionStats.rate >= 40
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'"
+              >
+                {{ queueResolutionStats.rate }}%
+              </span>
+            </div>
           </div>
+
+          <!-- Multi-segment Status Progress Bar -->
+          <div class="mt-2 w-full h-2 rounded-full overflow-hidden flex bg-slate-200/80">
+            <div
+              v-if="queueResolutionStats.resolvedPct > 0"
+              class="bg-emerald-500 transition-all duration-300"
+              :style="{ width: queueResolutionStats.resolvedPct + '%' }"
+              :title="`Resolved (Completed/Closed): ${queueResolutionStats.resolvedPct}%`"
+            ></div>
+            <div
+              v-if="queueResolutionStats.inProgressPct > 0"
+              class="bg-blue-500 transition-all duration-300"
+              :style="{ width: queueResolutionStats.inProgressPct + '%' }"
+              :title="`In Progress: ${queueResolutionStats.inProgressPct}%`"
+            ></div>
+            <div
+              v-if="queueResolutionStats.pendingPct > 0"
+              class="bg-amber-400 transition-all duration-300"
+              :style="{ width: queueResolutionStats.pendingPct + '%' }"
+              :title="`Pending: ${queueResolutionStats.pendingPct}%`"
+            ></div>
+            <div
+              v-if="queueResolutionStats.newPct > 0"
+              class="bg-sky-400 transition-all duration-300"
+              :style="{ width: queueResolutionStats.newPct + '%' }"
+              :title="`New: ${queueResolutionStats.newPct}%`"
+            ></div>
+          </div>
+
+          <div class="mt-2 flex items-center justify-between text-[10px] text-slate-500">
+            <span class="inline-flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Resolved
+            </span>
+            <span class="inline-flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>In Progress
+            </span>
+            <span class="inline-flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>Pending
+            </span>
+            <span class="inline-flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>New
+            </span>
+          </div>
+        </div>
+
+        <!-- Interactive Triage Metrics List -->
+        <div class="mt-3.5 space-y-1 text-xs">
+          <!-- Total Queue Volume -->
+          <button
+            type="button"
+            @click="selectTab('All')"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isActiveTab('All')
+              ? 'bg-blue-50/80 text-blue-900 font-semibold'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'"
+          >
+            <span class="flex items-center gap-2">
+              <i class="fa-solid fa-layer-group text-slate-400 w-4 text-center text-xs"></i>
+              <span>Total Queue Volume</span>
+            </span>
+            <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-slate-100 text-slate-800 border border-slate-200">
+              {{ counts.All ?? pagination.total ?? tickets.length }}
+            </span>
+          </button>
+
+          <!-- Assigned to Me -->
+          <button
+            type="button"
+            @click="setPreset('assigned_to_me')"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isPresetActive('assigned_to_me')
+              ? 'bg-blue-50 text-blue-900 font-semibold ring-1 ring-blue-200'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-blue-700'"
+          >
+            <span class="flex items-center gap-2">
+              <i class="fa-solid fa-user-check text-blue-600 w-4 text-center text-xs"></i>
+              <span>Assigned to Me</span>
+            </span>
+            <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-blue-50 text-blue-700 border border-blue-200">
+              {{ counts.presets?.assigned_to_me ?? 0 }}
+            </span>
+          </button>
 
           <!-- Unassigned -->
           <button
             type="button"
             @click="setPreset('unassigned')"
-            class="w-full flex items-center justify-between text-slate-600 hover:text-amber-700 transition group text-left cursor-pointer"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isPresetActive('unassigned')
+              ? 'bg-amber-50 text-amber-900 font-semibold ring-1 ring-amber-200'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-amber-700'"
           >
             <span class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <span class="group-hover:underline">Unassigned</span>
+              <i class="fa-solid fa-user-clock text-amber-500 w-4 text-center text-xs"></i>
+              <span>Unassigned Tickets</span>
             </span>
             <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-amber-50 text-amber-700 border border-amber-200">
               {{ counts.presets?.unassigned ?? counts.New ?? 0 }}
@@ -2656,13 +3037,14 @@ const natureDistribution = computed(() => {
           <button
             type="button"
             @click="setPreset('overdue')"
-            class="w-full flex items-center justify-between text-slate-600 hover:text-rose-700 transition group text-left cursor-pointer"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isPresetActive('overdue')
+              ? 'bg-rose-50 text-rose-900 font-semibold ring-1 ring-rose-200'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-rose-700'"
           >
             <span class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span class="group-hover:underline">SLA Overdue</span>
+              <i class="fa-solid fa-fire-flame-curved text-rose-500 w-4 text-center text-xs"></i>
+              <span>SLA Overdue (&gt;24h)</span>
             </span>
             <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-rose-50 text-rose-700 border border-rose-200">
               {{ counts.presets?.overdue ?? 0 }}
@@ -2673,34 +3055,45 @@ const natureDistribution = computed(() => {
           <button
             type="button"
             @click="setPreset('awaiting_rating')"
-            class="w-full flex items-center justify-between text-slate-600 hover:text-indigo-700 transition group text-left cursor-pointer"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isPresetActive('awaiting_rating')
+              ? 'bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-200'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-indigo-700'"
           >
             <span class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-              </svg>
-              <span class="group-hover:underline">Awaiting Rating</span>
+              <i class="fa-regular fa-star text-indigo-500 w-4 text-center text-xs"></i>
+              <span>Awaiting Client Rating</span>
             </span>
             <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-indigo-50 text-indigo-700 border border-indigo-200">
               {{ counts.presets?.awaiting_rating ?? 0 }}
             </span>
           </button>
 
-          <!-- In Progress -->
-          <div class="flex items-center justify-between text-slate-600 pt-1">
+          <!-- Active In Progress -->
+          <button
+            type="button"
+            @click="selectTab('In Progress')"
+            class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition text-left cursor-pointer"
+            :class="isActiveTab('In Progress')
+              ? 'bg-emerald-50 text-emerald-900 font-semibold ring-1 ring-emerald-200'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-emerald-700'"
+          >
             <span class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-              <span>In Progress</span>
+              <i class="fa-solid fa-gears text-emerald-600 w-4 text-center text-xs"></i>
+              <span>Active In Progress</span>
             </span>
-            <span class="font-bold text-slate-900">{{ counts['In Progress'] ?? 0 }}</span>
-          </div>
+            <span class="font-bold px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+              {{ counts['In Progress'] ?? 0 }}
+            </span>
+          </button>
         </div>
       </div>
 
-      <!-- 2. IT STAFF ON-DUTY (GITHUB CONTRIBUTORS STYLE) -->
+      <!-- 2. ON-DUTY IT STAFF WORKLOAD (GITHUB CONTRIBUTORS STYLE) -->
       <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
         <div class="flex items-center justify-between pb-3 border-b border-slate-100">
           <div class="flex items-center gap-2">
+            <i class="fa-solid fa-users-gear text-blue-700 text-xs"></i>
             <span class="text-xs font-bold uppercase tracking-wider text-slate-800">On-Duty IT Staff</span>
             <span class="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
               {{ staffOptions.length }}
@@ -2712,115 +3105,256 @@ const natureDistribution = computed(() => {
             @click="filterByStaff('')"
             class="text-[11px] font-semibold text-blue-600 hover:underline cursor-pointer"
           >
-            Clear Filter
+            Clear
           </button>
         </div>
 
         <!-- Staff List -->
-        <div class="mt-3 divide-y divide-slate-100">
+        <div class="mt-3 divide-y divide-slate-100 max-h-72 overflow-y-auto pr-0.5">
           <button
             v-for="staff in staffOptions"
             :key="getStaffName(staff)"
             type="button"
             @click="filterByStaff(getStaffName(staff))"
-            class="w-full py-2.5 flex items-center justify-between hover:bg-slate-50 px-2 -mx-2 rounded-lg transition text-left group cursor-pointer"
-            :class="{ 'bg-blue-50/70 text-blue-900': assignedStaffFilter === getStaffName(staff) }"
+            class="w-full py-2.5 px-2.5 -mx-1 rounded-xl transition text-left group cursor-pointer block"
+            :class="assignedStaffFilter === getStaffName(staff)
+              ? 'bg-blue-50/90 ring-1 ring-blue-200'
+              : 'hover:bg-slate-50'"
+            :title="`Click to filter tickets assigned to ${getStaffName(staff)} (${getStaffStats(staff).resolved} resolved, ${getStaffStats(staff).total} total)`"
           >
-            <div class="flex items-center gap-2.5 min-w-0">
-              <!-- Avatar Circle -->
-              <div class="relative shrink-0">
-                <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-slate-700 to-slate-900 text-white flex items-center justify-center font-bold text-[10px] shadow-xs">
-                  {{ getStaffInitial(staff) }}
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <!-- Avatar Circle -->
+                <div class="relative shrink-0">
+                  <div
+                    class="w-7 h-7 rounded-full text-white flex items-center justify-center font-bold text-[10px] shadow-xs"
+                    :class="assignedStaffFilter === getStaffName(staff)
+                      ? 'bg-blue-800'
+                      : 'bg-gradient-to-tr from-slate-700 to-slate-900'"
+                  >
+                    {{ getStaffInitial(staff) }}
+                  </div>
+                  <span
+                    class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-white"
+                    :class="getStaffActiveCount(staff) === 0 ? 'bg-emerald-500' : 'bg-blue-500'"
+                  ></span>
                 </div>
-                <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                <div class="min-w-0">
+                  <p
+                    class="text-xs font-semibold truncate transition"
+                    :class="assignedStaffFilter === getStaffName(staff)
+                      ? 'text-blue-900 font-bold'
+                      : 'text-slate-800 group-hover:text-blue-700'"
+                  >
+                    {{ getStaffName(staff) }}
+                  </p>
+                  <p class="text-[10px] text-slate-400 flex items-center gap-1.5">
+                    <span>{{ getStaffStats(staff).resolved }} resolved</span>
+                    <span>•</span>
+                    <span>{{ getStaffStats(staff).total }} total</span>
+                  </p>
+                </div>
               </div>
-              <div class="truncate">
-                <p class="text-xs font-semibold text-slate-800 group-hover:text-blue-600 truncate" :class="{ 'text-blue-900': assignedStaffFilter === getStaffName(staff) }">
-                  {{ getStaffName(staff) }}
-                </p>
-                <p class="text-[10px] text-slate-400">Technical Support</p>
-              </div>
+
+              <!-- Open workload badge -->
+              <span
+                class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border"
+                :class="getStaffActiveCount(staff) === 0
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : getStaffActiveCount(staff) >= 5
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-blue-50 text-blue-700 border-blue-200'"
+              >
+                <template v-if="getStaffActiveCount(staff) === 0">
+                  Available
+                </template>
+                <template v-else>
+                  {{ getStaffActiveCount(staff) }} {{ getStaffActiveCount(staff) === 1 ? 'open' : 'open' }}
+                </template>
+              </span>
             </div>
 
-            <!-- Open workload badge -->
-            <span
-              class="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full border"
-              :class="getStaffActiveCount(staff) > 0
-                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                : 'bg-slate-50 text-slate-500 border-slate-200'"
-            >
-              {{ getStaffActiveCount(staff) }} assigned ticket
-            </span>
+            <!-- Mini Workload Bar -->
+            <div class="mt-1.5 w-full h-1 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                class="h-full rounded-full transition-all duration-300"
+                :class="getStaffActiveCount(staff) === 0
+                  ? 'bg-emerald-400'
+                  : getStaffActiveCount(staff) >= 5
+                    ? 'bg-amber-500'
+                    : 'bg-blue-500'"
+                :style="{ width: getStaffActiveCount(staff) === 0 ? '8%' : Math.min(100, Math.round((getStaffActiveCount(staff) / maxStaffActiveLoad) * 100)) + '%' }"
+              ></div>
+            </div>
           </button>
         </div>
       </div>
 
-      <!-- 3. SUPPORT NATURE DISTRIBUTION (GITHUB LANGUAGES PROGRESS BAR STYLE) -->
-      <div v-if="natureDistribution.length" class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-        <div class="pb-3 border-b border-slate-100">
-          <span class="text-xs font-bold uppercase tracking-wider text-slate-800">Support Breakdown</span>
-        </div>
+      <!-- 3. QUEUE DISTRIBUTION (SUPPORT NATURE & DIVISION BREAKDOWN) -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-100 gap-2">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-800">Queue Breakdown</span>
 
-        <!-- Continuous Progress Bar -->
-        <div class="mt-3 w-full h-2 rounded-full overflow-hidden flex bg-slate-100">
-          <div
-            v-for="item in natureDistribution"
-            :key="item.name"
-            :class="item.color.bg"
-            :style="{ width: item.pct + '%' }"
-            :title="`${item.name}: ${item.count} tickets (${item.pct}%)`"
-          ></div>
-        </div>
-
-        <!-- Legend Items -->
-        <div class="mt-3 space-y-1.5">
-          <div
-            v-for="item in natureDistribution"
-            :key="item.name"
-            class="flex items-center justify-between text-xs"
-          >
-            <div class="flex items-center gap-2 truncate">
-              <span class="w-2 h-2 rounded-full shrink-0" :class="item.color.dot"></span>
-              <span class="text-slate-700 truncate">{{ item.name }}</span>
-            </div>
-            <span class="text-slate-400 font-medium shrink-0">{{ item.pct }}% ({{ item.count }})</span>
+          <!-- Segmented Switcher: Support vs Division -->
+          <div class="inline-flex rounded-lg bg-slate-100 p-0.5 text-[10px] font-semibold">
+            <button
+              type="button"
+              @click="breakdownTab = 'nature'"
+              class="px-2 py-0.5 rounded-md transition cursor-pointer"
+              :class="breakdownTab === 'nature' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+            >
+              Support
+            </button>
+            <button
+              type="button"
+              @click="breakdownTab = 'division'"
+              class="px-2 py-0.5 rounded-md transition cursor-pointer"
+              :class="breakdownTab === 'division' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+            >
+              Division
+            </button>
           </div>
+        </div>
+
+        <!-- Tab A: Support Nature Breakdown -->
+        <div v-if="breakdownTab === 'nature'">
+          <template v-if="natureDistribution.length">
+            <!-- Continuous Progress Bar -->
+            <div class="mt-3.5 w-full h-2.5 rounded-full overflow-hidden flex bg-slate-100 gap-0.5">
+              <div
+                v-for="item in natureDistribution"
+                :key="item.name"
+                :class="item.color.bg"
+                :style="{ width: item.pct + '%' }"
+                :title="`${item.name}: ${item.count} tickets (${item.pct}%)`"
+              ></div>
+            </div>
+
+            <!-- Interactive Legend Items -->
+            <div class="mt-3 space-y-1">
+              <button
+                v-for="item in natureDistribution"
+                :key="item.name"
+                type="button"
+                @click="searchText = searchText === item.name ? '' : item.name"
+                class="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-lg hover:bg-slate-50 transition cursor-pointer text-left"
+                :class="{ 'bg-blue-50/80 font-semibold text-blue-900': searchText === item.name }"
+                :title="`Click to filter by ${item.name}`"
+              >
+                <div class="flex items-center gap-2 truncate pr-2">
+                  <span class="w-2.5 h-2.5 rounded-full shrink-0" :class="item.color.dot"></span>
+                  <span class="text-slate-700 truncate">{{ item.name }}</span>
+                </div>
+                <span class="text-slate-500 font-semibold shrink-0 text-[11px]">
+                  {{ item.count }} <span class="text-slate-400 font-normal">({{ item.pct }}%)</span>
+                </span>
+              </button>
+            </div>
+          </template>
+          <p v-else class="text-xs text-slate-400 text-center py-4">No support breakdown data available.</p>
+        </div>
+
+        <!-- Tab B: Division Breakdown (Interactive Filter) -->
+        <div v-else>
+          <template v-if="divisionDistribution.length">
+            <!-- Continuous Progress Bar -->
+            <div class="mt-3.5 w-full h-2.5 rounded-full overflow-hidden flex bg-slate-100 gap-0.5">
+              <div
+                v-for="item in divisionDistribution"
+                :key="item.name"
+                :class="item.color.bg"
+                :style="{ width: item.pct + '%' }"
+                :title="`${item.name}: ${item.count} tickets (${item.pct}%)`"
+              ></div>
+            </div>
+
+            <!-- Interactive Division Rows -->
+            <div class="mt-3 space-y-1">
+              <button
+                v-for="item in divisionDistribution"
+                :key="item.name"
+                type="button"
+                @click="filterByDivisionFromRail(item.name)"
+                class="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-lg hover:bg-slate-50 transition cursor-pointer text-left"
+                :class="{ 'bg-blue-50/80 font-semibold text-blue-900 ring-1 ring-blue-200': isDivisionSelectedInRail(item.name) }"
+                :title="`Click to filter by ${item.name} division`"
+              >
+                <div class="flex items-center gap-2 truncate pr-2">
+                  <span class="w-2.5 h-2.5 rounded-full shrink-0" :class="item.color.dot"></span>
+                  <span class="text-slate-700 truncate">{{ item.name }}</span>
+                </div>
+                <span class="text-slate-500 font-semibold shrink-0 text-[11px]">
+                  {{ item.count }} <span class="text-slate-400 font-normal">({{ item.pct }}%)</span>
+                </span>
+              </button>
+            </div>
+          </template>
+          <p v-else class="text-xs text-slate-400 text-center py-4">No division data available.</p>
         </div>
       </div>
 
-      <!-- 4. SLA BENCHMARKS & GUIDELINES -->
+      <!-- 4. SLA BENCHMARKS & KEYBOARD SHORTCUTS -->
       <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-        <div class="pb-3 border-b border-slate-100">
-          <span class="text-xs font-bold uppercase tracking-wider text-slate-800">SLA Policy</span>
+        <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-800">SLA Policy & Shortcuts</span>
+          <span
+            class="text-[10px] font-bold px-2 py-0.5 rounded-full border"
+            :class="(counts.presets?.overdue ?? 0) === 0
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-rose-50 text-rose-700 border-rose-200'"
+          >
+            {{ (counts.presets?.overdue ?? 0) === 0 ? 'SLA On Track' : `${counts.presets.overdue} Overdue` }}
+          </span>
         </div>
 
         <div class="mt-3 space-y-2.5 text-xs text-slate-600">
-          <div class="flex items-start gap-2">
-            <i class="fa-solid fa-bolt text-emerald-600 mt-0.5"></i>
+          <div class="flex items-start gap-2.5">
+            <div class="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
+              <i class="fa-solid fa-bolt text-[11px]"></i>
+            </div>
             <div>
               <p class="font-semibold text-slate-800">24-Hour Response</p>
               <p class="text-[11px] text-slate-500">Tickets must be assigned and attended within 24 hours.</p>
             </div>
           </div>
-          <div class="flex items-start gap-2">
-            <i class="fa-regular fa-clock text-blue-600 mt-0.5"></i>
+          <div class="flex items-start gap-2.5">
+            <div class="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+              <i class="fa-regular fa-clock text-[11px]"></i>
+            </div>
             <div>
               <p class="font-semibold text-slate-800">48-Hour Resolution</p>
-              <p class="text-[11px] text-slate-500">Standard issues completed within 48 hours.</p>
+              <p class="text-[11px] text-slate-500">Standard technical requests resolved within 48 hours.</p>
             </div>
           </div>
-          <div class="flex items-start gap-2">
-            <i class="fa-solid fa-triangle-exclamation text-rose-600 mt-0.5"></i>
+          <div class="flex items-start gap-2.5">
+            <div class="w-6 h-6 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 mt-0.5">
+              <i class="fa-solid fa-triangle-exclamation text-[11px]"></i>
+            </div>
             <div>
               <p class="font-semibold text-slate-800">Overdue Escalation</p>
-              <p class="text-[11px] text-slate-500">Overdue tickets highlight red for urgent attention.</p>
+              <p class="text-[11px] text-slate-500">Tickets exceeding 24h highlight red for priority triage.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Keyboard Shortcuts -->
+        <div class="mt-4 pt-3 border-t border-slate-100">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Quick Shortcuts</p>
+          <div class="grid grid-cols-2 gap-1.5 text-[11px] text-slate-600">
+            <div class="flex items-center justify-between bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+              <span>Global Search</span>
+              <kbd class="px-1.5 py-0.2 font-mono text-[10px] bg-white border border-slate-300 rounded shadow-2xs">/</kbd>
+            </div>
+            <div class="flex items-center justify-between bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+              <span>Next / Prev</span>
+              <kbd class="px-1.5 py-0.2 font-mono text-[10px] bg-white border border-slate-300 rounded shadow-2xs">J / K</kbd>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 5. QUICK ACTIONS & PORTALS (GITHUB SUGGESTED WORKFLOWS STYLE) -->
-      <div class="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-5 shadow-xs">
+      <!-- 5. CLIENT PORTAL CARD -->
+      <div class="bg-gradient-to-br from-slate-900 to-blue-950 text-white rounded-2xl p-5 shadow-xs">
         <div class="flex items-center gap-2">
           <div class="w-6 h-6 rounded-md bg-white/10 flex items-center justify-center text-xs">
             <i class="fa-solid fa-globe"></i>
@@ -2864,6 +3398,7 @@ const natureDistribution = computed(() => {
     :has-prev="hasPrevTicket"
     :has-next="hasNextTicket"
     :initial-tab="modalInitialTab"
+    :initial-action="modalInitialAction"
     :allow-status-change="false"
     @prev="selectPrevTicket"
     @next="selectNextTicket"
@@ -3196,6 +3731,70 @@ const natureDistribution = computed(() => {
           class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 transition cursor-pointer"
         >
           {{ isBulkDeleting ? 'Deleting...' : `Delete ${selectedCount} Tickets` }}
+        </button>
+      </div>
+    </div>
+  </Modal>
+
+  <!-- ── MODAL - Single Delete Ticket (Admin only) ────────────────────── -->
+  <Modal :show="showSingleDeleteModal" @close="closeSingleDeleteModal" maxWidth="md">
+    <div class="p-6 bg-white rounded-2xl">
+      <div class="flex items-center justify-between pb-3 border-b border-rose-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+            <i class="fa-solid fa-triangle-exclamation text-rose-600 text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Delete Ticket?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent administrative action</p>
+          </div>
+        </div>
+        <button type="button" @click="closeSingleDeleteModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 py-4 text-xs">
+        <p class="text-slate-700 leading-relaxed">
+          This will permanently delete
+          <strong class="font-mono text-rose-700 font-bold">Ticket {{ expectedDeleteRef }}</strong>
+          <span v-if="ticketToDelete?.client_name">
+            for <strong class="text-slate-900 font-bold">{{ ticketToDelete.client_name }}</strong>
+          </span>.
+          This action <span class="font-bold text-rose-700">cannot be undone</span>.
+        </p>
+
+        <div>
+          <label class="block text-xs text-slate-600 mb-1.5">
+            Type <span class="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 select-all">{{ expectedDeleteRef }}</span> to confirm.
+          </label>
+          <input
+            ref="singleDeleteInputRef"
+            v-model.trim="singleDeleteTypedRef"
+            type="text"
+            class="w-full rounded-lg border border-slate-300 focus:ring-2 focus:ring-rose-500 focus:border-rose-500 px-3 py-2 text-xs font-mono text-slate-800"
+            :placeholder="expectedDeleteRef"
+            @keyup.enter="canConfirmSingleDelete ? submitSingleDelete() : null"
+          />
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          :disabled="isSingleDeleting"
+          @click="closeSingleDeleteModal"
+          class="px-3.5 py-2 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          :disabled="!canConfirmSingleDelete || isSingleDeleting"
+          @click="submitSingleDelete"
+          class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
+        >
+          {{ isSingleDeleting ? 'Deleting...' : 'Delete' }}
         </button>
       </div>
     </div>

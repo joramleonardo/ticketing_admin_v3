@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Enums\SupportNature;
 use App\Enums\TicketStatus;
-use App\Enums\TicketType;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\TicketClientDetail;
@@ -259,6 +258,9 @@ class TicketStatusController extends Controller
 
         if ($request->exists('ticket_assigned_staff')) {
             $user = auth()->user();
+            if (! $user || ! in_array($user->role, ['Admin', 'Super Admin'], true)) {
+                abort(403, 'Only administrators can assign or reassign tickets.');
+            }
             $updateData['ticket_assigned_by'] = $user?->name ?? 'System';
             $updateData['ticket_assigned_by_id'] = $user?->id ?? null; // if column exists
         }
@@ -325,6 +327,13 @@ class TicketStatusController extends Controller
                 );
             }
         });
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Ticket updated successfully.',
+            ]);
+        }
 
         return back()->with('success', 'Ticket updated successfully.');
     }

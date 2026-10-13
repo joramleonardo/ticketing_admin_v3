@@ -77,7 +77,7 @@
 
             <!-- Edit Button -->
             <button
-              v-if="ticket && status !== 'Closed'"
+              v-if="ticket"
               type="button"
               @click="togglePanel('edit')"
               class="h-8 px-2.5 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer"
@@ -674,23 +674,25 @@
 
                 <div class="space-y-3 text-xs">
                   <!-- Status & SLA -->
-                  <div class="flex items-center justify-between">
-                    <span class="text-slate-500 font-medium">Status</span>
-                    <div class="flex items-center gap-1.5">
-                      <span
-                        class="px-2 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wide border shadow-2xs"
-                        :class="{
-                          'text-blue-700 bg-blue-100 border-blue-200': status === 'New',
-                          'text-amber-700 bg-amber-100 border-amber-200': status === 'Pending',
-                          'text-emerald-700 bg-emerald-100 border-emerald-200': status === 'In Progress',
-                          'text-purple-700 bg-purple-100 border-purple-200': status === 'Completed',
-                          'text-slate-700 bg-slate-200 border-slate-300': status === 'Closed'
-                        }"
-                      >
-                        {{ status || 'N/A' }}
-                      </span>
-                      <TicketSlaBadge :ticket="ticket" />
-                    </div>
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-slate-500 font-medium shrink-0">Status</span>
+                    <span
+                      class="px-2 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wide border shadow-2xs"
+                      :class="{
+                        'text-blue-700 bg-blue-100 border-blue-200': status === 'New',
+                        'text-amber-700 bg-amber-100 border-amber-200': status === 'Pending',
+                        'text-emerald-700 bg-emerald-100 border-emerald-200': status === 'In Progress',
+                        'text-purple-700 bg-purple-100 border-purple-200': status === 'Completed',
+                        'text-slate-700 bg-slate-200 border-slate-300': status === 'Closed'
+                      }"
+                    >
+                      {{ status || 'N/A' }}
+                    </span>
+                  </div>
+
+                  <div class="flex items-center justify-between gap-2 flex-wrap">
+                    <span class="text-slate-500 font-medium shrink-0">SLA</span>
+                    <TicketSlaBadge :ticket="ticket" :compact="true" />
                   </div>
 
                   <!-- Assigned Staff -->
@@ -848,9 +850,9 @@
 
         <!-- Dynamic Action Buttons based on status -->
         <div class="flex items-center gap-2 flex-wrap">
-          <!-- Assign / Reassign Staff -->
+          <!-- Assign / Reassign Staff (Admin only) -->
           <button
-            v-if="status === 'New' || status === 'Pending' || status === 'In Progress'"
+            v-if="isAdmin && (status === 'New' || status === 'Pending' || status === 'In Progress')"
             type="button"
             @click="togglePanel('assign')"
             class="px-3.5 py-1.5 text-xs font-bold uppercase rounded-xl shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer"
@@ -950,6 +952,7 @@ const props = defineProps({
   hasPrev: { type: Boolean, default: false },
   hasNext: { type: Boolean, default: false },
   initialTab: { type: String, default: 'overview' }, // 'overview' | 'messages' | 'attachments' | 'activity'
+  initialAction: { type: String, default: null }, // 'edit' | 'assign' | 'complete' | 'close' | null
 })
 
 const emit = defineEmits(['close', 'updated', 'prev', 'next'])
@@ -1015,7 +1018,7 @@ onBeforeUnmount(() => {
 })
 
 // ── Roles & Identity ──────────────────────────────────────────────────────────
-const isAdmin = computed(() => page.props?.auth?.user?.role === 'Admin')
+const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
 const currentUserName = computed(() => page.props?.auth?.user?.name || page.props?.auth?.user?.username || 'Staff')
 
 // ── Reactive Local Ticket (For Immediate UI Updates After Edits/Actions) ───────
@@ -1469,10 +1472,13 @@ async function fetchActivityLogs(refCode) {
 }
 
 watch(
-  () => [props.show, ticketRef.value, props.initialTab],
-  ([showNow, refCode, newTab]) => {
+  () => [props.show, ticketRef.value, props.initialTab, props.initialAction],
+  ([showNow, refCode, newTab, newAction]) => {
     if (showNow) {
-      activeActionPanel.value = null
+      activeActionPanel.value = newAction || null
+      if (newAction) {
+        initPanelData(newAction)
+      }
       actionError.value = ''
       activeTab.value = newTab || 'overview'
       if (refCode) {

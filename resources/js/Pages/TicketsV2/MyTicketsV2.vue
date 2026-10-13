@@ -273,11 +273,21 @@ function handleKpiCardClick(cardKey) {
 
 // ── Export Accomplishment Report URL ─────────────────────────────────────────
 const exportReportUrl = computed(() => {
+  if (allRef.value?.exportUrl) {
+    return allRef.value.exportUrl
+  }
   const params = new URLSearchParams()
   if (props.filters?.status) params.set('status', props.filters.status)
   if (props.filters?.division) params.set('division', props.filters.division)
   if (props.filters?.preset) params.set('preset', props.filters.preset)
   if (props.filters?.search) params.set('search', props.filters.search)
+  if (props.filters?.year) params.set('year', props.filters.year)
+  if (props.filters?.date_preset) params.set('date_preset', props.filters.date_preset)
+  if (props.filters?.date_from) params.set('date_from', props.filters.date_from)
+  if (props.filters?.date_to) params.set('date_to', props.filters.date_to)
+  if (props.filters?.month) params.set('month', props.filters.month)
+  if (props.filters?.quarter) params.set('quarter', props.filters.quarter)
+  if (props.filters?.months) params.set('months', props.filters.months)
   const qs = params.toString()
   return qs ? `/admin/my-tickets/export?${qs}` : '/admin/my-tickets/export'
 })

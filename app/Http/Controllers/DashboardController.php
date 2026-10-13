@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Carbon\Carbon;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -387,7 +388,15 @@ class DashboardController extends Controller
             'prev_resolved' => $prevResolved,
         ];
 
+        $user = Auth::user();
+        $userRole = $user?->role ?? 'Staff';
+        $staffPersonal = $this->getStaffPersonalData($user?->name ?? '', $year, $monthsArr);
+        $adminQueue = $this->getAdminQueueData();
+
         return Inertia::render('Dashboard', [
+            'userRole' => $userRole,
+            'staffPersonal' => $staffPersonal,
+            'adminQueue' => $adminQueue,
             'ticketStats' => $stats,
             'slaStats' => $slaStats,
             'trends' => $trends,
@@ -399,12 +408,173 @@ class DashboardController extends Controller
             'natureCounts' => $natureCounts,
             'supportTypeCounts' => $supportTypeCounts,
             'assignedStaffOptions' => $assignedStaffOptions,
+            'staffMembers' => $assignedStaffOptions,
             'filters' => [
                 'year' => $year,
                 'months' => implode(',', $monthsArr),
                 'assigned_staff' => $assignedStaff,
             ],
         ]);
+    }
+
+    private function getStaffPersonalData(string $staffName, int $year, array $monthsArr): array
+    {
+        $base = $this->applyDashboardFilters(
+            DB::table('v2_ticket_details as td'),
+            $year,
+            $monthsArr,
+            $staffName,
+        );
+
+        $pending = (clone $base)->where('td.ticket_status', 'Pending')->count();
+        $inProgress = (clone $base)->where('td.ticket_status', 'In Progress')->count();
+        $completed = (clone $base)->whereIn('td.ticket_status', ['Completed', 'Closed'])->count();
+        $total = (clone $base)->count();
+
+        // Urgent tickets assigned to me that need attention (Pending or In Progress)
+        $urgentTickets = DB::table('v2_ticket_details as td')
+            ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
+            ->where(function ($q) use ($staffName): void {
+                $q->whereRaw("TRIM(COALESCE(td.ticket_assigned_staff, '')) = ?", [$staffName])
+                    ->orWhereRaw("CONCAT(',', REPLACE(COALESCE(td.ticket_assisted_by, ''), ', ', ','), ',') LIKE ?", ["%,{$staffName},%"]);
+            })
+            ->whereIn('td.ticket_status', ['New', 'Pending', 'In Progress'])
+            ->select([
+                'td.ticket_id',
+                'c.client_id',
+                'c.client_referenceNo',
+                'c.client_name',
+                'c.client_division_agency',
+                'td.ticket_status',
+                'td.ticket_type',
+                'td.ticket_support_type',
+                'td.ticket_nature_of_support',
+                'td.ticket_problem_that_needed_support',
+                'td.date_requested',
+                'td.created_at',
+            ])
+            ->orderBy('td.date_requested', 'asc')
+            ->limit(8)
+            ->get();
+
+        // Personal Ratings for tickets attended by me
+        $personalRatings = DB::table('v2_ticket_rating_details as r')
+            ->join('v2_ticket_details as td', 'td.client_referenceNo', '=', 'r.client_referenceNo')
+            ->where(function ($q) use ($staffName): void {
+                $q->whereRaw("TRIM(COALESCE(td.ticket_assigned_staff, '')) = ?", [$staffName])
+                    ->orWhereRaw("CONCAT(',', REPLACE(COALESCE(td.ticket_assisted_by, ''), ', ', ','), ',') LIKE ?", ["%,{$staffName},%"]);
+            })
+            ->whereNotNull('r.rating_result')
+            ->select('r.rating_result', 'r.rating_comment_suggestion', 'r.created_at', 'td.client_referenceNo')
+            ->orderByDesc('r.created_at')
+            ->get();
+
+        $totalRatings = $personalRatings->count();
+        $sumStars = 0;
+        foreach ($personalRatings as $pr) {
+            $val = match (trim((string) $pr->rating_result)) {
+                '5', 'Excellent' => 5,
+                '4', 'Very Good' => 4,
+                '3', 'Good' => 3,
+                '2', 'Fair', 'Poor' => 2,
+                '1', 'Very Poor' => 1,
+                default => 5,
+            };
+            $sumStars += $val;
+        }
+        $avgScore = $totalRatings > 0 ? round($sumStars / $totalRatings, 1) : 5.0;
+
+        $recentMyFeedback = $personalRatings->take(5)->map(function ($fb): array {
+            $score = match (trim((string) $fb->rating_result)) {
+                '5', 'Excellent' => 5,
+                '4', 'Very Good' => 4,
+                '3', 'Good' => 3,
+                '2', 'Fair', 'Poor' => 2,
+                '1', 'Very Poor' => 1,
+                default => 5,
+            };
+
+            return [
+                'client_referenceNo' => (string) $fb->client_referenceNo,
+                'stars' => $score,
+                'rating_result' => (string) $fb->rating_result,
+                'comment' => $fb->rating_comment_suggestion ? trim((string) $fb->rating_comment_suggestion) : null,
+                'created_at' => $fb->created_at ? Carbon::parse($fb->created_at)->diffForHumans() : 'Recently',
+            ];
+        });
+
+        return [
+            'stats' => [
+                'pending' => $pending,
+                'in_progress' => $inProgress,
+                'completed' => $completed,
+                'total' => $total,
+            ],
+            'urgent_tickets' => $urgentTickets,
+            'avg_rating' => $avgScore,
+            'total_ratings' => $totalRatings,
+            'recent_feedback' => $recentMyFeedback,
+        ];
+    }
+
+    private function getAdminQueueData(): array
+    {
+        // Unassigned tickets needing dispatch
+        $unassignedTickets = DB::table('v2_ticket_details as td')
+            ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
+            ->where(function ($q): void {
+                $q->where('td.ticket_status', 'New')
+                    ->orWhereNull('td.ticket_assigned_staff')
+                    ->orWhereRaw("TRIM(td.ticket_assigned_staff) = ''");
+            })
+            ->whereNotIn('td.ticket_status', ['Completed', 'Closed', 'Cancelled'])
+            ->select([
+                'td.ticket_id',
+                'c.client_id',
+                'c.client_referenceNo',
+                'c.client_name',
+                'c.client_division_agency',
+                'c.client_email',
+                'td.ticket_status',
+                'td.ticket_type',
+                'td.ticket_support_type',
+                'td.ticket_nature_of_support',
+                'td.ticket_problem_that_needed_support',
+                'td.date_requested',
+                'td.created_at',
+            ])
+            ->orderBy('td.date_requested', 'desc')
+            ->limit(6)
+            ->get();
+
+        // Overdue tickets (> 24h active)
+        $overdueTickets = DB::table('v2_ticket_details as td')
+            ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
+            ->whereIn('td.ticket_status', ['New', 'Pending', 'In Progress'])
+            ->where('td.date_requested', '<=', now()->subHours(24))
+            ->select([
+                'td.ticket_id',
+                'c.client_id',
+                'c.client_referenceNo',
+                'c.client_name',
+                'c.client_division_agency',
+                'c.client_email',
+                'td.ticket_assigned_staff',
+                'td.ticket_status',
+                'td.ticket_type',
+                'td.ticket_support_type',
+                'td.ticket_nature_of_support',
+                'td.ticket_problem_that_needed_support',
+                'td.date_requested',
+            ])
+            ->orderBy('td.date_requested', 'asc')
+            ->limit(6)
+            ->get();
+
+        return [
+            'unassigned_tickets' => $unassignedTickets,
+            'overdue_tickets' => $overdueTickets,
+        ];
     }
 
     public function export(Request $request): StreamedResponse

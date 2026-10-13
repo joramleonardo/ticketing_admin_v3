@@ -33,7 +33,7 @@ class StaffService
     public function getActiveStaff(): Collection
     {
         return User::query()
-            ->whereIn('role', ['Staff', 'Admin', 'Super Admin'])
+            ->whereIn('role', ['Staff', 'Admin'])
             ->where('isActivated', '!=', '0')
             ->orderBy('name')
             ->get(['id', 'name', 'username', 'role', 'email']);
@@ -47,7 +47,7 @@ class StaffService
     public function getActiveStaffNames(): array
     {
         $names = User::query()
-            ->whereIn('role', ['Staff', 'Admin', 'Super Admin'])
+            ->whereIn('role', ['Staff', 'Admin'])
             ->where('isActivated', '!=', '0')
             ->orderBy('name')
             ->pluck('name')

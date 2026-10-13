@@ -36,6 +36,62 @@ class MyTicketsController extends Controller
         $division = trim((string) $request->input('division', ''));
         $preset = trim((string) $request->input('preset', ''));
 
+        $datePreset = trim((string) $request->input('date_preset', ''));
+        $rawDateFrom = trim((string) $request->input('date_from', ''));
+        $rawDateTo = trim((string) $request->input('date_to', ''));
+        $dateFrom = $rawDateFrom;
+        $dateTo = $rawDateTo;
+
+        if ($datePreset === 'today') {
+            $dateFrom = now()->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'yesterday') {
+            $dateFrom = now()->subDay()->toDateString();
+            $dateTo = now()->subDay()->toDateString();
+        } elseif ($datePreset === 'last_7_days') {
+            $dateFrom = now()->subDays(6)->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'this_month') {
+            $dateFrom = now()->startOfMonth()->toDateString();
+            $dateTo = now()->endOfMonth()->toDateString();
+        }
+
+        $year = $request->filled('year') ? (int) $request->input('year') : null;
+        $month = $request->filled('month') ? (int) $request->input('month') : null;
+        $quarter = trim((string) $request->input('quarter', ''));
+        $monthsCsv = trim((string) $request->input('months', ''));
+        $monthsArr = [];
+        if ($monthsCsv !== '') {
+            $monthsArr = array_values(array_filter(array_map(function ($v) {
+                $n = (int) trim($v);
+
+                return ($n >= 1 && $n <= 12) ? $n : null;
+            }, explode(',', $monthsCsv))));
+        }
+
+        $applyDateFiltersRel = function ($d) use ($year, $month, $quarter, $monthsArr, $dateFrom, $dateTo) {
+            if ($dateFrom) {
+                $d->whereDate('date_requested', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $d->whereDate('date_requested', '<=', $dateTo);
+            }
+            if ($year) {
+                $d->whereYear('date_requested', $year);
+            }
+            if (! empty($monthsArr)) {
+                $d->whereIn(DB::raw('MONTH(date_requested)'), $monthsArr);
+            } elseif ($quarter !== '') {
+                $ranges = ['Q1' => [1, 3], 'Q2' => [4, 6], 'Q3' => [7, 9], 'Q4' => [10, 12]];
+                if (isset($ranges[$quarter])) {
+                    [$m1, $m2] = $ranges[$quarter];
+                    $d->whereBetween(DB::raw('MONTH(date_requested)'), [$m1, $m2]);
+                }
+            } elseif ($month) {
+                $d->whereMonth('date_requested', $month);
+            }
+        };
+
         $searchLen = mb_strlen($search);
         $booleanQ = $this->toBooleanQuery($search);
 
@@ -169,6 +225,11 @@ class MyTicketsController extends Controller
                             ->orWhere('client_division_agency', $label);
                     });
                 }
+            })
+
+            // date filters
+            ->when($dateFrom || $dateTo || $year || $month || $quarter || ! empty($monthsArr), function ($q) use ($applyDateFiltersRel) {
+                $q->whereHas('detail', $applyDateFiltersRel);
             })
 
             // search
@@ -407,6 +468,13 @@ class MyTicketsController extends Controller
                 'division' => $division,
                 'preset' => $preset,
                 'perPage' => $perPage,
+                'date_preset' => $datePreset,
+                'date_from' => $rawDateFrom,
+                'date_to' => $rawDateTo,
+                'year' => $year,
+                'month' => $month,
+                'quarter' => $quarter,
+                'months' => $monthsCsv,
             ],
 
             'pendingTickets' => $pendingTickets,
@@ -467,8 +535,60 @@ class MyTicketsController extends Controller
         $status = $request->input('status');
         $division = trim((string) $request->input('division', ''));
         $preset = trim((string) $request->input('preset', ''));
+
+        $datePreset = trim((string) $request->input('date_preset', ''));
         $dateFrom = trim((string) $request->input('date_from', ''));
         $dateTo = trim((string) $request->input('date_to', ''));
+
+        if ($datePreset === 'today') {
+            $dateFrom = now()->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'yesterday') {
+            $dateFrom = now()->subDay()->toDateString();
+            $dateTo = now()->subDay()->toDateString();
+        } elseif ($datePreset === 'last_7_days') {
+            $dateFrom = now()->subDays(6)->toDateString();
+            $dateTo = now()->toDateString();
+        } elseif ($datePreset === 'this_month') {
+            $dateFrom = now()->startOfMonth()->toDateString();
+            $dateTo = now()->endOfMonth()->toDateString();
+        }
+
+        $year = $request->filled('year') ? (int) $request->input('year') : null;
+        $month = $request->filled('month') ? (int) $request->input('month') : null;
+        $quarter = trim((string) $request->input('quarter', ''));
+        $monthsCsv = trim((string) $request->input('months', ''));
+        $monthsArr = [];
+        if ($monthsCsv !== '') {
+            $monthsArr = array_values(array_filter(array_map(function ($v) {
+                $n = (int) trim($v);
+
+                return ($n >= 1 && $n <= 12) ? $n : null;
+            }, explode(',', $monthsCsv))));
+        }
+
+        $applyDateFiltersRel = function ($d) use ($year, $month, $quarter, $monthsArr, $dateFrom, $dateTo) {
+            if ($dateFrom) {
+                $d->whereDate('date_requested', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $d->whereDate('date_requested', '<=', $dateTo);
+            }
+            if ($year) {
+                $d->whereYear('date_requested', $year);
+            }
+            if (! empty($monthsArr)) {
+                $d->whereIn(DB::raw('MONTH(date_requested)'), $monthsArr);
+            } elseif ($quarter !== '') {
+                $ranges = ['Q1' => [1, 3], 'Q2' => [4, 6], 'Q3' => [7, 9], 'Q4' => [10, 12]];
+                if (isset($ranges[$quarter])) {
+                    [$m1, $m2] = $ranges[$quarter];
+                    $d->whereBetween(DB::raw('MONTH(date_requested)'), [$m1, $m2]);
+                }
+            } elseif ($month) {
+                $d->whereMonth('date_requested', $month);
+            }
+        };
 
         $searchLen = mb_strlen($search);
         $booleanQ = $this->toBooleanQuery($search);
@@ -550,11 +670,8 @@ class MyTicketsController extends Controller
             ->when($preset === 'completed_today', function ($q) {
                 $q->whereHas('detail', fn ($d) => $d->where('ticket_status', 'Completed')->whereDate('date_completed', now()->toDateString()));
             })
-            ->when($dateFrom, function ($q) use ($dateFrom) {
-                $q->whereHas('detail', fn ($d) => $d->whereDate('date_requested', '>=', $dateFrom));
-            })
-            ->when($dateTo, function ($q) use ($dateTo) {
-                $q->whereHas('detail', fn ($d) => $d->whereDate('date_requested', '<=', $dateTo));
+            ->when($dateFrom || $dateTo || $year || $month || $quarter || ! empty($monthsArr), function ($q) use ($applyDateFiltersRel) {
+                $q->whereHas('detail', $applyDateFiltersRel);
             })
             ->when($search !== '', function ($q) use ($search) {
                 $term = '%'.$search.'%';

@@ -102,13 +102,39 @@ it('streams csv accomplishment report for the technician', function (): void {
         ->and($content)->toContain('EXP-001');
 });
 
+it('filters my tickets and csv export by selected date range', function (): void {
+    $user = User::factory()->create(['name' => 'John Technician']);
+
+    createMyTicket('DATE-JAN', 'John Technician', 'Completed', 'Hardware', 'FAD', dateCompleted: '2026-01-16 10:00:00', dateRequested: '2026-01-15');
+    createMyTicket('DATE-MAR', 'John Technician', 'Completed', 'Software', 'IRAD', dateCompleted: '2026-03-11 10:00:00', dateRequested: '2026-03-10');
+
+    $this->actingAs($user)
+        ->get(route('admin.my-tickets', ['date_from' => '2026-03-01', 'date_to' => '2026-03-31']))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('tickets.data', 1)
+            ->where('tickets.data.0.client_referenceNo', 'DATE-MAR')
+            ->where('filters.date_from', '2026-03-01')
+            ->where('filters.date_to', '2026-03-31')
+        );
+
+    $exportResponse = $this->actingAs($user)
+        ->get(route('admin.my-tickets.export', ['date_from' => '2026-03-01', 'date_to' => '2026-03-31']))
+        ->assertOk();
+
+    $csvContent = $exportResponse->streamedContent();
+    expect($csvContent)->toContain('DATE-MAR')
+        ->and($csvContent)->not->toContain('DATE-JAN');
+});
+
 function createMyTicket(
     string $referenceNo,
     string $assignedStaff,
     string $status,
     string $nature,
     string $division,
-    ?string $dateCompleted = null
+    ?string $dateCompleted = null,
+    string $dateRequested = '2026-01-15'
 ): void {
     DB::table('v2_ticket_details')->insert([
         'client_referenceNo' => $referenceNo,
@@ -117,17 +143,17 @@ function createMyTicket(
         'ticket_support_type' => 'Troubleshooting',
         'ticket_assigned_staff' => $assignedStaff,
         'ticket_status' => $status,
-        'date_requested' => '2026-01-15',
+        'date_requested' => $dateRequested,
         'date_completed' => $dateCompleted,
-        'created_at' => '2026-01-15 08:00:00',
-        'updated_at' => '2026-01-15 08:00:00',
+        'created_at' => $dateRequested.' 08:00:00',
+        'updated_at' => $dateRequested.' 08:00:00',
     ]);
 
     DB::table('v2_ticket_client_details')->insert([
         'client_referenceNo' => $referenceNo,
         'client_name' => fake()->name(),
         'client_division_agency' => $division,
-        'created_at' => '2026-01-15 08:00:00',
-        'updated_at' => '2026-01-15 08:00:00',
+        'created_at' => $dateRequested.' 08:00:00',
+        'updated_at' => $dateRequested.' 08:00:00',
     ]);
 }

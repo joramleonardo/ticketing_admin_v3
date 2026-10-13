@@ -268,8 +268,9 @@ it('exports filtered tickets to CSV format', function (): void {
     $response->assertHeader('content-type', 'text/csv; charset=UTF-8');
 });
 
-it('bulk assigns selected tickets to a staff member', function (): void {
-    $staff = User::factory()->create();
+it('bulk assigns selected tickets to a staff member only if admin', function (): void {
+    $staff = User::factory()->create(['role' => 'Staff']);
+    $admin = User::factory()->create(['role' => 'Admin']);
 
     $id1 = DB::table('v2_ticket_details')->insertGetId([
         'client_referenceNo' => '20261007-BLK1',
@@ -289,7 +290,15 @@ it('bulk assigns selected tickets to a staff member', function (): void {
         'updated_at' => now(),
     ]);
 
-    $response = $this->actingAs($staff)->postJson('/admin/tickets-v2/bulk-assign', [
+    // Staff attempt should be forbidden (403)
+    $forbiddenResponse = $this->actingAs($staff)->postJson('/admin/tickets-v2/bulk-assign', [
+        'ticket_ids' => [$id1, $id2],
+        'assigned_staff' => 'Agent Smith',
+    ]);
+    $forbiddenResponse->assertForbidden();
+
+    // Admin attempt should succeed
+    $response = $this->actingAs($admin)->postJson('/admin/tickets-v2/bulk-assign', [
         'ticket_ids' => [$id1, $id2],
         'assigned_staff' => 'Agent Smith',
     ]);
@@ -631,4 +640,155 @@ it('supports dispatch mode heartbeat monitoring for new tickets and messages', f
         ->and($pollData['new_messages'][0]['message'])->toBe('Help, printer is smoking!')
         ->and($pollData['counts'])->not->toBeNull()
         ->and($pollData['counts']['New'])->toBeGreaterThanOrEqual(2);
+});
+
+it('preserves division and search filters when recalculating status counts during heartbeat updates', function (): void {
+    $user = User::factory()->create([
+        'name' => 'Dispatch Agent',
+        'role' => 'Admin',
+    ]);
+
+    DB::table('v2_ticket_client_details')->insert([
+        [
+            'client_referenceNo' => '20261013-FAD1',
+            'client_name' => 'FAD Employee One',
+            'client_division_agency' => '1', // FAD numeric code
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-FAD2',
+            'client_name' => 'FAD Employee Two',
+            'client_division_agency' => 'FAD', // FAD label
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-CRPD1',
+            'client_name' => 'CRPD Employee One',
+            'client_division_agency' => '3', // CRPD
+            'created_at' => now(),
+        ],
+    ]);
+
+    DB::table('v2_ticket_details')->insert([
+        [
+            'client_referenceNo' => '20261013-FAD1',
+            'ticket_type' => 'Technical Support',
+            'ticket_status' => 'New',
+            'date_requested' => now(),
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-FAD2',
+            'ticket_type' => 'Technical Support',
+            'ticket_status' => 'In Progress',
+            'date_requested' => now(),
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-CRPD1',
+            'ticket_type' => 'Technical Support',
+            'ticket_status' => 'Completed',
+            'date_requested' => now(),
+            'created_at' => now(),
+        ],
+    ]);
+
+    // Filter by Division = 1 (FAD)
+    $fadRes = $this->actingAs($user)->getJson('/admin/tickets-v2/check-updates?include_counts=1&division=1');
+    $fadRes->assertSuccessful();
+    $fadCounts = $fadRes->json('counts');
+
+    expect($fadCounts['All'])->toBe(2)
+        ->and($fadCounts['New'])->toBe(1)
+        ->and($fadCounts['In Progress'])->toBe(1)
+        ->and($fadCounts['Completed'])->toBe(0);
+
+    // Filter by Division = 3 (CRPD)
+    $crpdRes = $this->actingAs($user)->getJson('/admin/tickets-v2/check-updates?include_counts=1&division=3');
+    $crpdRes->assertSuccessful();
+    $crpdCounts = $crpdRes->json('counts');
+
+    expect($crpdCounts['All'])->toBe(1)
+        ->and($crpdCounts['Completed'])->toBe(1)
+        ->and($crpdCounts['New'])->toBe(0);
+});
+
+it('allows Super Admin and Admin to delete a single ticket and returns json', function (): void {
+    $superAdmin = User::factory()->create([
+        'name' => 'Super Admin User',
+        'role' => 'Super Admin',
+    ]);
+
+    $clientId = DB::table('v2_ticket_client_details')->insertGetId([
+        'client_referenceNo' => '20261013-DEL1',
+        'client_name' => 'Delete Target Client',
+        'client_division_agency' => '1',
+        'created_at' => now(),
+    ]);
+
+    DB::table('v2_ticket_details')->insert([
+        'ticket_id' => $clientId,
+        'client_referenceNo' => '20261013-DEL1',
+        'ticket_type' => 'Technical Support',
+        'ticket_status' => 'New',
+        'date_requested' => now(),
+        'created_at' => now(),
+    ]);
+
+    $response = $this->actingAs($superAdmin)->deleteJson("/admin/tickets-v2/{$clientId}");
+    $response->assertSuccessful()
+        ->assertJsonPath('success', true);
+
+    expect(DB::table('v2_ticket_client_details')->where('client_id', $clientId)->exists())->toBeFalse()
+        ->and(DB::table('v2_ticket_details')->where('client_referenceNo', '20261013-DEL1')->exists())->toBeFalse();
+});
+
+it('returns matching tickets for the global navbar quick search endpoint', function (): void {
+    $user = User::factory()->create([
+        'name' => 'Joram Kate Leonardo',
+        'role' => 'Super Admin',
+    ]);
+
+    DB::table('v2_ticket_client_details')->insert([
+        [
+            'client_referenceNo' => '20261013-QS1',
+            'client_name' => 'Maria Clara',
+            'client_division_agency' => '1',
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-QS2',
+            'client_name' => 'Crisostomo Ibarra',
+            'client_division_agency' => '2',
+            'created_at' => now(),
+        ],
+    ]);
+
+    DB::table('v2_ticket_details')->insert([
+        [
+            'client_referenceNo' => '20261013-QS1',
+            'ticket_type' => 'Technical Support',
+            'ticket_status' => 'In Progress',
+            'ticket_problem_that_needed_support' => 'Projector HDMI cable malfunction',
+            'ticket_assigned_staff' => 'Lloyd Mandapat',
+            'date_requested' => now(),
+            'created_at' => now(),
+        ],
+        [
+            'client_referenceNo' => '20261013-QS2',
+            'ticket_type' => 'Livestream',
+            'ticket_status' => 'New',
+            'ticket_problem_that_needed_support' => 'Zoom webinar setup',
+            'ticket_assigned_staff' => null,
+            'date_requested' => now(),
+            'created_at' => now(),
+        ],
+    ]);
+
+    $response = $this->actingAs($user)->getJson('/admin/tickets-v2/quick-search?q=Projector');
+    $response->assertSuccessful()
+        ->assertJsonPath('total', 1)
+        ->assertJsonPath('results.0.client_referenceNo', '20261013-QS1')
+        ->assertJsonPath('results.0.division', 'FAD')
+        ->assertJsonPath('results.0.status', 'In Progress');
 });

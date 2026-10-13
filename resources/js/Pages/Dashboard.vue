@@ -1,19 +1,16 @@
 <script setup>
     import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
-    import TicketStats from "@/Pages/TicketsV2/DashboardComponents/TicketStats.vue"
-    import TicketSlaPerformance from "@/Pages/TicketsV2/DashboardComponents/TicketSlaPerformance.vue"
-    import TicketDivisionBar from "@/Pages/TicketsV2/DashboardComponents/TicketDivisionBar.vue"
-    import TechnicalSupportRatings from "@/Pages/TicketsV2/DashboardComponents/TechnicalSupportRatings.vue"
-    import TechnicalSupportByNature from "@/Pages/TicketsV2/DashboardComponents/TechnicalSupportByNature.vue"
-    import TechnicalSupportRatingsDistribution from "@/Pages/TicketsV2/DashboardComponents/TechnicalSupportRatingsDistribution.vue"
-    import StaffWorkloadCard from "@/Pages/TicketsV2/DashboardComponents/StaffWorkloadCard.vue"
-    import RecentFeedbackCard from "@/Pages/TicketsV2/DashboardComponents/RecentFeedbackCard.vue"
-    import TechnicalSupportBySupportType from "@/Pages/TicketsV2/DashboardComponents/TechnicalSupportBySupportType.vue"
+    import SuperAdminDashboard from "@/Pages/Dashboard/SuperAdminDashboard.vue"
+    import AdminDashboard from "@/Pages/Dashboard/AdminDashboard.vue"
+    import StaffDashboard from "@/Pages/Dashboard/StaffDashboard.vue"
 
-    import { Head, router } from '@inertiajs/vue3'
-    import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+    import { Head, router, usePage } from '@inertiajs/vue3'
+    import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 
     const props = defineProps({
+        userRole: { type: String, default: '' },
+        staffPersonal: { type: Object, default: () => ({}) },
+        adminQueue: { type: Object, default: () => ({}) },
         ticketStats: { type: Object, default: () => ({}) },
         slaStats: { type: Object, default: () => ({}) },
         trends: { type: Object, default: () => ({}) },
@@ -28,10 +25,15 @@
         filters: { type: Object, default: () => ({}) },
     })
 
-    const now = new Date()
+    const page = usePage()
+    const actualRole = computed(() => props.userRole || page.props.auth?.user?.role || 'Staff')
+    const activeViewRole = ref(actualRole.value)
 
-    // --- Tab Navigation ---
-    const activeTab = ref('operations') // 'operations' | 'csm' | 'all'
+    watch(() => props.userRole, (newRole) => {
+        if (newRole) activeViewRole.value = newRole
+    })
+
+    const now = new Date()
 
     // --- Live Monitoring & Auto-Refresh ---
     const isAutoRefresh = ref(false)
@@ -42,7 +44,7 @@
     function manualRefresh() {
         isRefreshing.value = true
         router.reload({
-            only: ['ticketStats', 'slaStats', 'trends', 'staffWorkload', 'recentFeedback', 'divisionCounts', 'ratingCounts', 'ratingUnratedTotal', 'natureCounts', 'supportTypeCounts'],
+            only: ['ticketStats', 'slaStats', 'trends', 'staffWorkload', 'recentFeedback', 'divisionCounts', 'ratingCounts', 'ratingUnratedTotal', 'natureCounts', 'supportTypeCounts', 'staffPersonal', 'adminQueue'],
             preserveScroll: true,
             preserveState: true,
             onFinish: () => {
@@ -203,11 +205,51 @@
     <AuthenticatedLayout>
         <div class="space-y-6">
             <!-- Top Controls Card -->
-            <div class="relative z-40 flex flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm print:hidden">
+            <div class="relative z-20 flex flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm print:hidden">
                 <div class="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                        <div class="flex items-center gap-2.5">
-                            <h1 class="text-xl font-black text-slate-800 tracking-tight">Ticket Analytics & KPIs</h1>
+                        <div class="flex items-center gap-2.5 flex-wrap">
+                            <h1 class="text-xl font-black text-slate-800 tracking-tight">
+                                {{ activeViewRole === 'Super Admin' ? 'Executive Analytics & Strategy' : (activeViewRole === 'Admin' ? 'Operations & Queue Management' : 'My Support Workspace') }}
+                            </h1>
+
+                            <!-- Active Role Badge / Switcher for Admins -->
+                            <div v-if="actualRole === 'Admin' || actualRole === 'Super Admin'" class="inline-flex items-center p-0.5 bg-slate-100 rounded-lg border border-slate-200/90 gap-0.5 text-[11px] font-bold">
+                                <button
+                                    type="button"
+                                    @click="activeViewRole = 'Super Admin'"
+                                    class="px-2 py-0.5 rounded-md transition cursor-pointer"
+                                    :class="activeViewRole === 'Super Admin' ? 'bg-purple-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+                                    title="View Super Admin Dashboard"
+                                >
+                                    Super Admin
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="activeViewRole = 'Admin'"
+                                    class="px-2 py-0.5 rounded-md transition cursor-pointer"
+                                    :class="activeViewRole === 'Admin' ? 'bg-blue-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+                                    title="View Admin Dashboard"
+                                >
+                                    Admin
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="activeViewRole = 'Staff'"
+                                    class="px-2 py-0.5 rounded-md transition cursor-pointer"
+                                    :class="activeViewRole === 'Staff' ? 'bg-slate-800 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
+                                    title="View Staff Workspace"
+                                >
+                                    Staff
+                                </button>
+                            </div>
+                            <span
+                                v-else
+                                class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200"
+                            >
+                                {{ actualRole }}
+                            </span>
+
                             <!-- Live status indicator -->
                             <button
                                 type="button"
@@ -235,7 +277,7 @@
                     </div>
 
                     <!-- Header Action Buttons -->
-                    <div class="relative z-50 flex flex-wrap items-center gap-2">
+                    <div class="relative z-10 flex flex-wrap items-center gap-2">
                         <!-- Manual Refresh Button -->
                         <button
                             type="button"
@@ -285,7 +327,7 @@
                         <!-- Export CSV Button -->
                         <a
                             :href="exportUrl"
-                            class="relative z-50 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
+                            class="relative z-10 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
                         >
                             <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -403,8 +445,8 @@
                         </div>
                     </div>
 
-                    <!-- Staff Filter Dropdown -->
-                    <div class="relative min-w-[12rem]">
+                    <!-- Staff Filter Dropdown (Hidden for Staff) -->
+                    <div v-if="activeViewRole !== 'Staff'" class="relative min-w-[12rem]">
                         <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                             <i class="fa-solid fa-user text-xs"></i>
                         </div>
@@ -442,97 +484,46 @@
                 </div>
             </div>
 
-            <!-- Executive KPI Row: TicketStats (6-card interactive grid) -->
-            <div>
-                <TicketStats :stats="ticketStats" :trends="trends" :filters="currentFilters" />
-            </div>
+            <!-- 1. Super Admin Executive Dashboard -->
+            <SuperAdminDashboard
+                v-if="activeViewRole === 'Super Admin'"
+                :ticket-stats="ticketStats"
+                :sla-stats="slaStats"
+                :trends="trends"
+                :staff-workload="staffWorkload"
+                :recent-feedback="recentFeedback"
+                :division-counts="divisionCounts"
+                :rating-counts="ratingCounts"
+                :rating-unrated-total="ratingUnratedTotal"
+                :nature-counts="natureCounts"
+                :support-type-counts="supportTypeCounts"
+                :filters="currentFilters"
+            />
 
-            <!-- View Tabs: Operations vs. CSM Satisfaction -->
-            <div class="flex items-center justify-between border-b border-slate-200/80 pb-3 print:hidden">
-                <div class="flex items-center gap-2">
-                    <button
-                        type="button"
-                        @click="activeTab = 'operations'"
-                        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition"
-                        :class="activeTab === 'operations'
-                            ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'bg-white border border-slate-200/80 text-slate-600 hover:bg-slate-50'"
-                    >
-                        <i class="fas fa-chart-line text-xs"></i>
-                        <span>Operations & SLA</span>
-                    </button>
+            <!-- 2. Admin Operations & Dispatch Dashboard -->
+            <AdminDashboard
+                v-else-if="activeViewRole === 'Admin'"
+                :ticket-stats="ticketStats"
+                :sla-stats="slaStats"
+                :trends="trends"
+                :staff-workload="staffWorkload"
+                :recent-feedback="recentFeedback"
+                :division-counts="divisionCounts"
+                :rating-counts="ratingCounts"
+                :rating-unrated-total="ratingUnratedTotal"
+                :nature-counts="natureCounts"
+                :support-type-counts="supportTypeCounts"
+                :admin-queue="adminQueue"
+                :assigned-staff-options="assignedStaffOptions"
+                :filters="currentFilters"
+            />
 
-                    <button
-                        type="button"
-                        @click="activeTab = 'csm'"
-                        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition"
-                        :class="activeTab === 'csm'
-                            ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'bg-white border border-slate-200/80 text-slate-600 hover:bg-slate-50'"
-                    >
-                        <i class="fas fa-star text-xs text-amber-300"></i>
-                        <span>Client Satisfaction (CSAT)</span>
-                    </button>
-
-                    <button
-                        type="button"
-                        @click="activeTab = 'all'"
-                        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition"
-                        :class="activeTab === 'all'
-                            ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'bg-white border border-slate-200/80 text-slate-600 hover:bg-slate-50'"
-                    >
-                        <i class="fas fa-table-cells-large text-xs"></i>
-                        <span>All Views</span>
-                    </button>
-                </div>
-
-                <div class="text-xs text-slate-400 font-medium hidden md:block">
-                    Click chart bars or KPI badges to drill down into filtered tickets
-                </div>
-            </div>
-
-            <!-- Tab 1 / Tab All: SLA & Operations Section -->
-            <div v-if="activeTab === 'operations' || activeTab === 'all'" class="space-y-6">
-                <!-- SLA & Turnaround Time Performance Widget -->
-                <TicketSlaPerformance :sla-stats="slaStats" :filters="currentFilters" />
-
-                <!-- Staff Workload & Capacity Card -->
-                <StaffWorkloadCard :items="staffWorkload" :filters="currentFilters" />
-
-                <!-- Categories & Division Breakdown Grid -->
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                    <div class="xl:col-span-6">
-                        <TechnicalSupportByNature :items="natureCounts" :filters="currentFilters" />
-                    </div>
-                    <div class="xl:col-span-6">
-                        <TicketDivisionBar :items="divisionCounts" :filters="currentFilters" />
-                    </div>
-                </div>
-
-                <!-- Technical Support Type / Action Breakdown -->
-                <div>
-                    <TechnicalSupportBySupportType :items="supportTypeCounts" :filters="currentFilters" />
-                </div>
-            </div>
-
-            <!-- Tab 2 / Tab All: Client Satisfaction Section -->
-            <div v-if="activeTab === 'csm' || activeTab === 'all'" class="space-y-6">
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                    <div class="xl:col-span-8">
-                        <TechnicalSupportRatings :items="ratingCounts" />
-                    </div>
-                    <div class="xl:col-span-4">
-                        <TechnicalSupportRatingsDistribution
-                            :items="ratingCounts"
-                            :unrated-total="ratingUnratedTotal"
-                        />
-                    </div>
-                </div>
-
-                <!-- Recent Client Commendations & Feedback Stream -->
-                <RecentFeedbackCard :items="recentFeedback" />
-            </div>
+            <!-- 3. Staff Personal Workspace Dashboard -->
+            <StaffDashboard
+                v-else
+                :staff-personal="staffPersonal"
+                :filters="currentFilters"
+            />
         </div>
     </AuthenticatedLayout>
 </template>

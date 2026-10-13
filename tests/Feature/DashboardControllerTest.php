@@ -106,6 +106,53 @@ it('downloads a dashboard report csv for the selected filters', function (): voi
         ->not->toContain('REF-CSV-002');
 });
 
+it('delivers role-specific props for Super Admin, Admin, and Staff users', function (): void {
+    $superAdmin = User::factory()->create(['name' => 'Super Boss', 'role' => 'Super Admin']);
+    $admin = User::factory()->create(['name' => 'Dispatch Admin', 'role' => 'Admin']);
+    $staff = User::factory()->create(['name' => 'Ada Reyes', 'role' => 'Staff']);
+
+    createTicket('REF-UNASSIGNED', '', 'New', 'Hardware', 'FAD');
+    createTicket('REF-STAFF-01', 'Ada Reyes', 'In Progress', 'Software', 'IRAD');
+    createTicket('REF-STAFF-02', 'Ada Reyes', 'Completed', 'Software', 'CRPD', 'Excellent');
+
+    // Super Admin View
+    $this->actingAs($superAdmin)
+        ->get(route('dashboard'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Dashboard')
+            ->where('userRole', 'Super Admin')
+            ->has('ticketStats')
+            ->has('adminQueue')
+            ->has('staffPersonal')
+        );
+
+    // Admin View with Queue Data
+    $this->actingAs($admin)
+        ->get(route('dashboard'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Dashboard')
+            ->where('userRole', 'Admin')
+            ->has('adminQueue.unassigned_tickets', 1)
+            ->where('adminQueue.unassigned_tickets.0.client_referenceNo', 'REF-UNASSIGNED')
+        );
+
+    // Staff View with Personal Stats
+    $this->actingAs($staff)
+        ->get(route('dashboard', ['year' => 2026, 'months' => '1']))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Dashboard')
+            ->where('userRole', 'Staff')
+            ->where('staffPersonal.stats.in_progress', 1)
+            ->where('staffPersonal.stats.completed', 1)
+            ->where('staffPersonal.stats.total', 2)
+            ->where('staffPersonal.avg_rating', 5)
+            ->where('staffPersonal.urgent_tickets.0.client_referenceNo', 'REF-STAFF-01')
+        );
+});
+
 function createTicket(
     string $referenceNo,
     string $assignedStaff,

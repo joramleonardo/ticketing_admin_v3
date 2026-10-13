@@ -1,11 +1,14 @@
 
 <script setup>
 import { reactive, watch, ref, computed, nextTick } from 'vue'
-import { router } from '@inertiajs/vue3'
+import { router, usePage } from '@inertiajs/vue3'
 import Modal from '@/Components/Modal.vue'
 
 import { useToast } from 'vue-toastification'
 const toast = useToast()
+const page = usePage()
+
+const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
 
 const emit = defineEmits(['close', 'updated'])
 
@@ -43,7 +46,7 @@ const canEdit = computed(() => {
   return {
     // always true for all statuses listed
     type: ['New', 'Pending', 'In Progress', 'Completed'].includes(st),
-    attendedBy: ['Pending', 'In Progress', 'Completed'].includes(st),
+    attendedBy: isAdmin.value && ['Pending', 'In Progress', 'Completed'].includes(st),
     completionFields: st === 'Completed', // nature/supportType/remarks
   }
 })

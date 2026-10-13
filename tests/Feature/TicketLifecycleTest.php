@@ -117,7 +117,7 @@ it('automatically closes a completed ticket when client submits rating', functio
 });
 
 it('can update ticket parameters including problem description and record activity log', function (): void {
-    $user = User::factory()->create(['name' => 'Tech Specialist']);
+    $user = User::factory()->create(['name' => 'Tech Specialist', 'role' => 'Admin']);
 
     $ticketId = DB::table('v2_ticket_details')->insertGetId([
         'client_referenceNo' => 'REF-EDIT-001',
@@ -150,4 +150,3 @@ it('can update ticket parameters including problem description and record activi
     expect($editLog)->not->toBeNull()
         ->and($editLog->activity_user)->toBe('Tech Specialist');
 });
-

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\NewTicketController;
+use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\CsmController;
 use App\Http\Controllers\CsmReportsController;
@@ -81,6 +82,7 @@ Route::middleware('auth')->group(function () {
 
     Route::prefix('admin/tickets-v2')->group(function () {
         Route::get('/', [TicketV2Controller::class, 'index'])->name('tickets-v2.index');
+        Route::get('/quick-search', [TicketV2Controller::class, 'quickSearch'])->name('tickets-v2.quick-search');
         Route::get('/check-updates', [TicketV2Controller::class, 'checkUpdates'])->name('tickets-v2.check-updates');
         Route::get('/export', [TicketV2Controller::class, 'export'])->name('tickets-v2.export');
         Route::post('/bulk-assign', [TicketV2Controller::class, 'bulkAssign'])->name('tickets-v2.bulk-assign');
@@ -100,6 +102,14 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/admin/tickets/{ref}/messages', [ClientController::class, 'ticketMessages'])->name('admin.tickets.messages.index');
     Route::post('/admin/tickets/{ref}/messages', [TicketV2Controller::class, 'postStaffMessage'])->name('admin.tickets.messages.store');
+
+    Route::prefix('admin/users')->name('admin.users.')->group(function () {
+        Route::get('/', [UserController::class, 'index'])->name('index');
+        Route::post('/', [UserController::class, 'store'])->name('store');
+        Route::put('/{user}', [UserController::class, 'update'])->name('update');
+        Route::patch('/{user}/toggle-status', [UserController::class, 'toggleStatus'])->name('toggle-status');
+        Route::delete('/{user}', [UserController::class, 'destroy'])->name('destroy');
+    });
 });
 
 Route::get('/ticket-classifications', fn () => response()->json(\App\Support\TicketClassification::all()))->name('ticket.classifications');
