@@ -15,9 +15,15 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    return Auth::check()
-        ? redirect()->route('dashboard')
-        : redirect()->route('login');
+    if (! Auth::check()) {
+        return redirect()->route('login');
+    }
+
+    return match (Auth::user()?->role) {
+        'Staff' => redirect()->route('admin.my-tickets'),
+        'Admin' => redirect()->route('tickets-v2.index'),
+        default => redirect()->route('dashboard'),
+    };
 });
 
 // Optional: legacy reports route pointing to same controller

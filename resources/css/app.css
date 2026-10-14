@@ -17,3 +17,8 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Ensure Vue-Toastification toasts float reliably above modals and sticky headers */
+.Vue-Toastification__container {
+  z-index: 99999 !important;
+}

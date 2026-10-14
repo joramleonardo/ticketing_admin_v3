@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -28,7 +29,7 @@ it('restricts user management index to Super Admin only', function (): void {
         ->get(route('admin.users.index'))
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
-            ->component('admin/Users/Index')
+            ->component('Admin/Users/Index')
             ->has('users.data')
             ->has('summary.total')
             ->has('summary.super_admins')
@@ -171,4 +172,145 @@ it('allows Super Admin to delete other users but prevents deleting self', functi
         ->assertSessionHas('success');
 
     expect(User::find($user->id))->toBeNull();
+});
+
+it('reassigns active tickets to a colleague when a staff member is deactivated with reassign action', function (): void {
+    $superAdmin = User::factory()->create(['role' => 'Super Admin']);
+    $staff1 = User::factory()->create(['name' => 'Tech Alpha', 'role' => 'Staff', 'isActivated' => '1']);
+    $staff2 = User::factory()->create(['name' => 'Tech Beta', 'role' => 'Staff', 'isActivated' => '1']);
+
+    DB::table('v2_ticket_details')->insert([
+        [
+            'client_referenceNo' => 'REF-REASSIGN-1',
+            'ticket_type' => 'Technical Support',
+            'ticket_nature_of_support' => 'Hardware',
+            'ticket_support_type' => 'Troubleshooting',
+            'ticket_assigned_staff' => 'Tech Alpha',
+            'ticket_status' => 'Pending',
+            'date_requested' => '2026-01-15',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+        [
+            'client_referenceNo' => 'REF-REASSIGN-2',
+            'ticket_type' => 'Technical Support',
+            'ticket_nature_of_support' => 'Software',
+            'ticket_support_type' => 'Installation',
+            'ticket_assigned_staff' => 'Tech Alpha',
+            'ticket_status' => 'In Progress',
+            'date_requested' => '2026-01-15',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+    ]);
+
+    $this->actingAs($superAdmin)
+        ->patch(route('admin.users.toggle-status', $staff1->id), [
+            'reassign_action' => 'reassign',
+            'reassign_to' => 'Tech Beta',
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success');
+
+    $staff1->refresh();
+    expect($staff1->isActivated)->toBe('0');
+
+    $updatedTickets = DB::table('v2_ticket_details')
+        ->whereIn('client_referenceNo', ['REF-REASSIGN-1', 'REF-REASSIGN-2'])
+        ->pluck('ticket_assigned_staff')
+        ->all();
+
+    expect($updatedTickets)->toBe(['Tech Beta', 'Tech Beta']);
+});
+
+it('unassigns active tickets to triage queue when a staff member is deactivated with unassign action', function (): void {
+    $superAdmin = User::factory()->create(['role' => 'Super Admin']);
+    $staff1 = User::factory()->create(['name' => 'Tech Gamma', 'role' => 'Staff', 'isActivated' => '1']);
+
+    DB::table('v2_ticket_details')->insert([
+        'client_referenceNo' => 'REF-UNASSIGN-1',
+        'ticket_type' => 'Technical Support',
+        'ticket_nature_of_support' => 'Software',
+        'ticket_support_type' => 'Troubleshooting',
+        'ticket_assigned_staff' => 'Tech Gamma',
+        'ticket_status' => 'Pending',
+        'date_requested' => '2026-01-15',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $this->actingAs($superAdmin)
+        ->patch(route('admin.users.toggle-status', $staff1->id), [
+            'reassign_action' => 'unassign',
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success');
+
+    $staff1->refresh();
+    expect($staff1->isActivated)->toBe('0');
+
+    $ticket = DB::table('v2_ticket_details')->where('client_referenceNo', 'REF-UNASSIGN-1')->first();
+    expect($ticket->ticket_assigned_staff)->toBeNull()
+        ->and($ticket->ticket_status)->toBe('New');
+});
+
+it('reassigns active tickets when a staff member is deleted with reassignment', function (): void {
+    $superAdmin = User::factory()->create(['role' => 'Super Admin']);
+    $staff1 = User::factory()->create(['name' => 'Tech Delta', 'role' => 'Staff']);
+    $staff2 = User::factory()->create(['name' => 'Tech Epsilon', 'role' => 'Staff']);
+
+    DB::table('v2_ticket_details')->insert([
+        'client_referenceNo' => 'REF-DEL-1',
+        'ticket_type' => 'Technical Support',
+        'ticket_nature_of_support' => 'Hardware',
+        'ticket_support_type' => 'Repair',
+        'ticket_assigned_staff' => 'Tech Delta',
+        'ticket_status' => 'In Progress',
+        'date_requested' => '2026-01-15',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $this->actingAs($superAdmin)
+        ->delete(route('admin.users.destroy', $staff1->id), [
+            'reassign_action' => 'reassign',
+            'reassign_to' => 'Tech Epsilon',
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success');
+
+    expect(User::find($staff1->id))->toBeNull();
+
+    $ticket = DB::table('v2_ticket_details')->where('client_referenceNo', 'REF-DEL-1')->first();
+    expect($ticket->ticket_assigned_staff)->toBe('Tech Epsilon');
+});
+
+it('synchronizes assigned tickets when staff member name is updated', function (): void {
+    $superAdmin = User::factory()->create(['role' => 'Super Admin']);
+    $staff = User::factory()->create(['name' => 'Johnny Old', 'username' => 'jold', 'role' => 'Staff', 'isActivated' => '1']);
+
+    DB::table('v2_ticket_details')->insert([
+        'client_referenceNo' => 'REF-NAME-1',
+        'ticket_type' => 'Technical Support',
+        'ticket_nature_of_support' => 'Hardware',
+        'ticket_support_type' => 'Repair',
+        'ticket_assigned_staff' => 'Johnny Old',
+        'ticket_status' => 'Pending',
+        'date_requested' => '2026-01-15',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $this->actingAs($superAdmin)
+        ->put(route('admin.users.update', $staff->id), [
+            'name' => 'Johnny New',
+            'username' => 'jold',
+            'role' => 'Staff',
+            'isActivated' => '1',
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success');
+
+    $ticket = DB::table('v2_ticket_details')->where('client_referenceNo', 'REF-NAME-1')->first();
+    expect($ticket->ticket_assigned_staff)->toBe('Johnny New');
 });

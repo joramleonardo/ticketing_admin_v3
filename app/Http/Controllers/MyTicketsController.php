@@ -276,8 +276,75 @@ class MyTicketsController extends Controller
             ->select('r1.client_referenceNo', DB::raw('MAX(r1.created_at) as max_created'))
             ->groupBy('r1.client_referenceNo');
 
+        $traySelectColumns = [
+            'd.ticket_id',
+            'd.client_referenceNo',
+            'c.client_id',
+            'c.client_name',
+            'c.client_division_agency',
+            'c.client_type',
+            'c.client_empID',
+            'c.client_email',
+            'd.ticket_type',
+            'd.ticket_nature_of_support',
+            'd.ticket_support_type',
+            'd.ticket_related_type',
+            'd.ticket_attended_by',
+            'd.ticket_assigned_by',
+            'd.ticket_assigned_staff',
+            'd.ticket_status',
+            'd.ticket_problem_that_needed_support',
+            'd.ticket_actions_taken',
+            'd.ticket_remarks',
+            'd.date_requested',
+            'd.date_completed',
+            'd.created_at',
+            'd.updated_at',
+            DB::raw('DATE_FORMAT(e.event_start_date, "%Y-%m-%d") as event_start_date'),
+            DB::raw('DATE_FORMAT(e.event_end_date,   "%Y-%m-%d") as event_end_date'),
+            'e.event_venue',
+            'e.event_remarks',
+        ];
+
+        $formatTicketRow = function ($t) {
+            $t->detail = (object) [
+                'ticket_id' => $t->ticket_id ?? null,
+                'client_referenceNo' => $t->client_referenceNo ?? '',
+                'ticket_type' => $t->ticket_type ?? null,
+                'ticket_nature_of_support' => $t->ticket_nature_of_support ?? null,
+                'ticket_support_type' => $t->ticket_support_type ?? null,
+                'ticket_related_type' => $t->ticket_related_type ?? null,
+                'ticket_attended_by' => $t->ticket_attended_by ?? null,
+                'ticket_assigned_by' => $t->ticket_assigned_by ?? null,
+                'ticket_assigned_staff' => $t->ticket_assigned_staff ?? null,
+                'ticket_status' => $t->ticket_status ?? null,
+                'ticket_problem_that_needed_support' => $t->ticket_problem_that_needed_support ?? null,
+                'ticket_actions_taken' => $t->ticket_actions_taken ?? null,
+                'ticket_remarks' => $t->ticket_remarks ?? null,
+                'date_requested' => $t->date_requested ?? null,
+                'date_completed' => $t->date_completed ?? null,
+                'created_at' => $t->created_at ?? null,
+                'updated_at' => $t->updated_at ?? null,
+                'client_division_agency' => $t->client_division_agency ?? null,
+                'client_type' => $t->client_type ?? null,
+                'client_name' => $t->client_name ?? null,
+                'client_email' => $t->client_email ?? null,
+            ];
+            if (isset($t->event_start_date) || isset($t->event_venue) || isset($t->event_remarks)) {
+                $t->event = (object) [
+                    'event_start_date' => $t->event_start_date ?? null,
+                    'event_end_date' => $t->event_end_date ?? null,
+                    'event_venue' => $t->event_venue ?? null,
+                    'event_remarks' => $t->event_remarks ?? null,
+                ];
+            }
+
+            return $t;
+        };
+
         $pendingTickets = DB::table('v2_ticket_details as d')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'd.client_referenceNo')
+            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo')
             ->joinSub($latestRating, 'lr', function ($join) {
                 $join->on('lr.client_referenceNo', '=', 'd.client_referenceNo');
             })
@@ -288,129 +355,51 @@ class MyTicketsController extends Controller
             ->where('r.rating_status', 'Pending')
             ->where('d.ticket_assigned_staff', $assignedValue) // only my tickets
             ->orderBy('d.created_at', 'desc')
-            ->select([
-                'd.client_referenceNo',
-                'c.client_name',
-                'd.ticket_type',
-                'd.ticket_nature_of_support',
-                'd.ticket_support_type',
-                'd.ticket_attended_by',
-                'd.ticket_assigned_by',
-                'd.ticket_assigned_staff',
-                'd.ticket_status',
-                'd.ticket_problem_that_needed_support',
-                'd.ticket_actions_taken',
-                'd.ticket_remarks',
-                'd.date_requested',
-                'd.date_completed',
-            ])
-            ->get();
+            ->select($traySelectColumns)
+            ->get()
+            ->map($formatTicketRow);
 
         $myNewTickets = DB::table('v2_ticket_details as d')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'd.client_referenceNo')
+            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo')
             ->where('d.ticket_assigned_staff', $assignedValue)
             ->where('d.ticket_status', 'Pending')
             ->orderBy('d.date_requested', 'desc')
-            ->select([
-                'd.ticket_id',
-                'd.client_referenceNo',
-                'c.client_name',
-                'c.client_type',
-                'd.ticket_type',
-                'd.ticket_nature_of_support',
-                'd.ticket_support_type',
-                'd.ticket_attended_by',
-                'd.ticket_assigned_by',
-                'd.ticket_assigned_staff',
-                'd.ticket_status',
-                'd.ticket_problem_that_needed_support',
-                'd.ticket_actions_taken',
-                'd.ticket_remarks',
-                'd.date_requested',
-                'd.date_completed',
-            ])
-            ->get();
+            ->select($traySelectColumns)
+            ->get()
+            ->map($formatTicketRow);
 
         $myInProgTickets = DB::table('v2_ticket_details as d')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'd.client_referenceNo')
-            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo') // ← add
+            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo')
             ->where('d.ticket_assigned_staff', $assignedValue)
             ->where('d.ticket_status', 'In Progress')
             ->orderBy('d.date_requested', 'desc')
-            ->select([
-                'd.ticket_id',
-                'd.client_referenceNo',
-                'c.client_name',
-                'd.ticket_type',
-                'd.ticket_nature_of_support',
-                'd.ticket_support_type',
-                'd.ticket_attended_by',
-                'd.ticket_assigned_by',
-                'd.ticket_assigned_staff',
-                'd.ticket_status',
-                'd.ticket_problem_that_needed_support',
-                'd.ticket_actions_taken',
-                'd.ticket_remarks',
-                'd.date_requested',
-                'd.date_completed',
-                // event fields (keep names the same for your Vue helper)
-                DB::raw('DATE_FORMAT(e.event_start_date, "%Y-%m-%d") as event_start_date'),
-                DB::raw('DATE_FORMAT(e.event_end_date,   "%Y-%m-%d") as event_end_date'),
-                'e.event_venue',
-                'e.event_remarks',
-            ])
-            ->get();
+            ->select($traySelectColumns)
+            ->get()
+            ->map($formatTicketRow);
 
         $myCompletedTickets = DB::table('v2_ticket_details as d')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'd.client_referenceNo')
+            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo')
             ->where('d.ticket_assigned_staff', $assignedValue)
             ->where('d.ticket_status', 'Completed')
             ->orderBy('d.date_completed', 'desc')
-            ->select([
-                'd.ticket_id',
-                'd.client_referenceNo',
-                'c.client_name',
-                'd.ticket_type',
-                'd.ticket_nature_of_support',
-                'd.ticket_support_type',
-                'd.ticket_attended_by',
-                'd.ticket_assigned_by',
-                'd.ticket_assigned_staff',
-                'd.ticket_status',
-                'd.ticket_problem_that_needed_support',
-                'd.ticket_actions_taken',
-                'd.ticket_remarks',
-                'd.date_requested',
-                'd.date_completed',
-            ])
-            ->get();
+            ->select($traySelectColumns)
+            ->get()
+            ->map($formatTicketRow);
 
         $noRatingTickets = DB::table('v2_ticket_details as d')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'd.client_referenceNo')
             ->leftJoin('v2_ticket_rating_details as r', 'r.client_referenceNo', '=', 'd.client_referenceNo')
+            ->leftJoin('v2_ticket_events as e', 'e.client_referenceNo', '=', 'd.client_referenceNo')
             ->where('d.ticket_assigned_staff', $assignedValue)
             ->where('d.ticket_status', 'Completed')
             ->whereNull('r.client_referenceNo') // anti-join → no rating row yet
             ->orderBy('d.date_completed', 'desc')
-            ->select([
-                'd.ticket_id',
-                'd.client_referenceNo',
-                'c.client_name',
-                'c.client_type',
-                'd.ticket_type',
-                'd.ticket_nature_of_support',
-                'd.ticket_support_type',
-                'd.ticket_attended_by',
-                'd.ticket_assigned_by',
-                'd.ticket_assigned_staff',
-                'd.ticket_status',
-                'd.ticket_problem_that_needed_support',
-                'd.ticket_actions_taken',
-                'd.ticket_remarks',
-                'd.date_requested',
-                'd.date_completed',
-            ])
-            ->get();
+            ->select($traySelectColumns)
+            ->get()
+            ->map($formatTicketRow);
 
         // Build one hash set of all references present in the Google Sheet
         $inSheet = $checker->referenceSet(); // ['20240119-001' => true, ...]

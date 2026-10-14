@@ -7,7 +7,11 @@
           class="absolute top-0 w-full h-full bg-blueGray-800 bg-no-repeat bg-full"
           :style="`background-image: url('${registerBg2}');`"
         ></div>
-        <ClientPick />
+        <ClientPick
+          :initial-view="initialView"
+          :initial-code="initialCode"
+          :auto-open="autoOpen"
+        />
         <footer-small absolute />
       </section>
     </main>
@@ -20,5 +24,9 @@
 
     import registerBg2 from "@/assets/img/register_bg_2.png";
 
-
+    defineProps({
+        initialView: { type: String, default: 'create' },
+        initialCode: { type: String, default: null },
+        autoOpen: { type: Boolean, default: false },
+    })
 </script>

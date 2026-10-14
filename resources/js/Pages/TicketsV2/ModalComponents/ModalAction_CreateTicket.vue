@@ -19,41 +19,69 @@ const page = usePage()
 // Current creation mode
 const creationMode = ref(props.initialMode || 'standard')
 
-watch(() => props.initialMode, (newVal) => {
-    if (newVal) creationMode.value = newVal
-})
-
 // Employees list for internal lookup
 const employees = ref([])
 const selectedEmployee = ref(null)
 const employeeSearchQuery = ref('')
 const showEmployeeDropdown = ref(false)
 
-const form = ref({
-    // Client Details
-    client_type: 'Internal',
-    client_name: '',
-    client_empID: '',
-    client_sex: '',
-    client_division_agency: '',
+function getInitialFormData() {
+    const authName = page.props?.auth?.user?.name || ''
+    const nowIso = new Date().toISOString().slice(0, 16)
+    return {
+        // Client Details
+        client_type: 'Internal',
+        client_name: '',
+        client_empID: '',
+        client_sex: '',
+        client_division_agency: '',
 
-    // Common Ticket Details
-    ticket_type: 'Technical Support',
-    ticket_problem_that_needed_support: '',
+        // Common Ticket Details
+        ticket_type: 'Technical Support',
+        ticket_problem_that_needed_support: '',
 
-    // Late Request Specifics
-    ticket_nature_of_support: 'Hardware',
-    ticket_support_type: '',
-    ticket_attended_by: '',
-    ticket_assisted_by: [],
-    ticket_actions_taken: '',
-    ticket_remarks: '',
-    date_requested: new Date().toISOString().slice(0, 16),
-    date_completed: new Date().toISOString().slice(0, 16),
-})
+        // Late Request Specifics
+        ticket_nature_of_support: 'Hardware',
+        ticket_support_type: 'Computer / Laptop',
+        ticket_attended_by: authName,
+        ticket_assisted_by: [],
+        ticket_actions_taken: '',
+        ticket_remarks: '',
+        date_requested: nowIso,
+        date_completed: nowIso,
+    }
+}
 
+const form = ref(getInitialFormData())
 const errors = ref({})
 const isSubmitting = ref(false)
+
+function resetForm() {
+    selectedEmployee.value = null
+    employeeSearchQuery.value = ''
+    showEmployeeDropdown.value = false
+    errors.value = {}
+    isSubmitting.value = false
+    Object.assign(form.value, getInitialFormData())
+}
+
+function setCreationMode(mode) {
+    if (creationMode.value === mode) return
+    creationMode.value = mode
+    resetForm()
+}
+
+function closeModal() {
+    resetForm()
+    emit('close')
+}
+
+watch(() => props.initialMode, (newVal) => {
+    if (newVal && newVal !== creationMode.value) {
+        creationMode.value = newVal
+        resetForm()
+    }
+})
 
 const groupedStaff = {
     'Technical Support': [
@@ -187,7 +215,7 @@ const submit = () => {
             onSuccess: (pageObj) => {
                 isSubmitting.value = false
                 const refNo = pageObj.props?.flash?.refNo
-                toast.success(refNo ? `Ticket #${refNo} created (In Progress).` : 'New ticket created.')
+                resetForm()
                 emit('success')
                 emit('created')
                 emit('close')
@@ -200,6 +228,17 @@ const submit = () => {
         })
     } else {
         // LATE / BACKDATED REQUEST -> /admin/tickets-v2
+        if (form.value.date_requested && form.value.date_completed) {
+            if (new Date(form.value.date_completed) < new Date(form.value.date_requested)) {
+                isSubmitting.value = false
+                errors.value = {
+                    date_completed: ['Completion date cannot be earlier than request date.'],
+                }
+                toast.error('Completion date cannot be earlier than request date.')
+                return
+            }
+        }
+
         const payload = {
             client_type: form.value.client_type,
             client_name: form.value.client_type === 'Internal'
@@ -226,9 +265,11 @@ const submit = () => {
         }
 
         router.post('/admin/tickets-v2', payload, {
-            onSuccess: () => {
+            onSuccess: (pageObj) => {
                 isSubmitting.value = false
-                toast.success('Late ticket entry recorded successfully!')
+                const refNo = pageObj?.props?.flash?.refNo
+                toast.success(refNo ? `Late ticket #${refNo} recorded successfully!` : 'Late ticket entry recorded successfully!')
+                resetForm()
                 emit('success')
                 emit('created')
                 emit('close')
@@ -244,7 +285,7 @@ const submit = () => {
 </script>
 
 <template>
-    <div class="bg-white rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+    <div class="bg-white rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] w-full max-w-3xl mx-auto">
         <!-- Modal Top Bar -->
         <div class="px-6 py-4 bg-gradient-to-r from-blue-950 via-blue-900 to-indigo-900 text-white flex items-center justify-between">
             <div class="flex items-center gap-3">
@@ -261,7 +302,7 @@ const submit = () => {
 
             <button
                 type="button"
-                @click="$emit('close')"
+                @click="closeModal"
                 class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition"
             >
                 ✕
@@ -273,7 +314,7 @@ const submit = () => {
             <div class="flex p-1 bg-gray-200/80 rounded-xl max-w-md mx-auto">
                 <button
                     type="button"
-                    @click="creationMode = 'standard'"
+                    @click="setCreationMode('standard')"
                     class="flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2"
                     :class="creationMode === 'standard'
                         ? 'bg-white text-blue-900 shadow-sm'
@@ -286,7 +327,7 @@ const submit = () => {
 
                 <button
                     type="button"
-                    @click="creationMode = 'late'"
+                    @click="setCreationMode('late')"
                     class="flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2"
                     :class="creationMode === 'late'
                         ? 'bg-white text-rose-900 shadow-sm'
@@ -311,6 +352,33 @@ const submit = () => {
 
         <!-- Scrollable Form Body -->
         <form @submit.prevent="submit" class="flex-1 overflow-y-auto p-6 space-y-6">
+            <!-- High-Visibility Validation Error Alert Banner at top -->
+            <div
+                v-if="Object.keys(errors).length > 0"
+                class="p-4 rounded-xl bg-red-50 border-2 border-red-300 text-red-900 text-xs shadow-sm flex items-start gap-3"
+            >
+                <div class="w-6 h-6 rounded-full bg-red-200 text-red-700 flex items-center justify-center shrink-0 mt-0.5">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div class="flex-1">
+                    <h5 class="font-bold text-red-900 text-xs uppercase tracking-wider">Please correct the following:</h5>
+                    <ul class="list-disc list-inside mt-1.5 space-y-1 font-medium text-red-800">
+                        <li v-for="(msg, field) in errors" :key="field">
+                            {{ Array.isArray(msg) ? msg[0] : msg }}
+                        </li>
+                    </ul>
+                </div>
+                <button
+                    type="button"
+                    @click="errors = {}"
+                    class="text-red-400 hover:text-red-700 font-bold text-sm leading-none p-1"
+                >
+                    ✕
+                </button>
+            </div>
+
             <!-- Section 1: Client Information -->
             <div class="space-y-4">
                 <div class="flex items-center justify-between border-b pb-2">
@@ -522,8 +590,17 @@ const submit = () => {
                             type="datetime-local"
                             v-model="form.date_completed"
                             required
-                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-rose-500 focus:border-rose-500 px-3 py-2"
+                            class="w-full text-xs sm:text-sm rounded-lg border px-3 py-2 transition"
+                            :class="errors.date_completed
+                                ? 'border-red-500 bg-red-50/50 text-red-900 focus:ring-2 focus:ring-red-500 focus:border-red-500'
+                                : 'border-gray-300 focus:ring-2 focus:ring-rose-500 focus:border-rose-500'"
                         />
+                        <p v-if="errors.date_completed" class="mt-1 text-xs text-red-600 font-semibold flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5 shrink-0 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                            </svg>
+                            {{ Array.isArray(errors.date_completed) ? errors.date_completed[0] : errors.date_completed }}
+                        </p>
                     </div>
 
                     <!-- Attended by -->
@@ -588,22 +665,13 @@ const submit = () => {
                 </div>
             </div>
 
-            <!-- Validation Error List -->
-            <div v-if="Object.keys(errors).length > 0" class="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
-                <strong class="font-bold">Please correct the following:</strong>
-                <ul class="list-disc list-inside mt-1 space-y-0.5">
-                    <li v-for="(msg, field) in errors" :key="field">
-                        {{ Array.isArray(msg) ? msg[0] : msg }}
-                    </li>
-                </ul>
-            </div>
         </form>
 
         <!-- Modal Footer -->
         <div class="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
             <button
                 type="button"
-                @click="$emit('close')"
+                @click="closeModal"
                 class="px-4 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition"
             >
                 Cancel

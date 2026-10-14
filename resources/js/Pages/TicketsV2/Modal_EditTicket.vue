@@ -8,7 +8,8 @@ import { useToast } from 'vue-toastification'
 const toast = useToast()
 const page = usePage()
 
-const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
+const userRole = computed(() => String(page.props?.auth?.user?.role || '').trim().toLowerCase())
+const isAdmin = computed(() => ['admin', 'super admin'].includes(userRole.value))
 
 const emit = defineEmits(['close', 'updated'])
 

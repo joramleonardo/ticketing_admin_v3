@@ -4,16 +4,21 @@ namespace App\Http\Controllers;
 
 use App\Enums\SupportNature;
 use App\Enums\TicketStatus;
+use App\Mail\TicketAssignedStaffNotificationMail;
+use App\Mail\TicketAttendedNotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\TicketClientDetail;
 use App\Models\TicketDetail;
 use App\Models\TicketEvent;
 use App\Models\TicketStatus as TicketStatusModel;
+use App\Models\User;
+use App\Services\StaffService;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
@@ -265,8 +270,12 @@ class TicketStatusController extends Controller
             $updateData['ticket_assigned_by_id'] = $user?->id ?? null; // if column exists
         }
 
+        $staffAssignedChanged = false;
+        $assignedStaffName = null;
+        $assignedBy = auth()->user()?->name ?? 'System';
+
         // --- Start transaction to keep ticket + event consistent ---
-        DB::transaction(function () use ($request, $detail, $updateData) {
+        DB::transaction(function () use ($request, $detail, $updateData, &$staffAssignedChanged, &$assignedStaffName) {
             $detail->fill($updateData);
             $dirty = $detail->getDirty();
             $originalStaff = $detail->getOriginal('ticket_assigned_staff');
@@ -279,6 +288,10 @@ class TicketStatusController extends Controller
                 $activityName = 'Ticket Details Updated';
                 if (array_key_exists('ticket_assigned_staff', $dirty)) {
                     $activityName = $originalStaff ? 'Staff Reassigned' : 'Staff Assigned';
+                    if (! empty($detail->ticket_assigned_staff) && $detail->ticket_assigned_staff !== $originalStaff) {
+                        $staffAssignedChanged = true;
+                        $assignedStaffName = $detail->ticket_assigned_staff;
+                    }
                 }
                 TicketActivityLog::create([
                     'client_referenceNo' => $detail->client_referenceNo,
@@ -328,6 +341,58 @@ class TicketStatusController extends Controller
             }
         });
 
+        if ($staffAssignedChanged && $assignedStaffName) {
+            $staffUser = User::where('name', $assignedStaffName)
+                ->orWhere('username', $assignedStaffName)
+                ->first();
+
+            $staffEmail = app(StaffService::class)->resolveStaffEmail($assignedStaffName)
+                ?? ($staffUser ? app(StaffService::class)->resolveStaffEmail($staffUser->name) : null);
+            $staffEmail = trim((string) ($staffEmail ?? ''));
+            if ($staffEmail !== '' && filter_var($staffEmail, FILTER_VALIDATE_EMAIL)) {
+                $client = DB::table('v2_ticket_client_details')
+                    ->where('client_referenceNo', $detail->client_referenceNo)
+                    ->first();
+
+                $adminBaseUrl = config('app.url');
+                if (! $adminBaseUrl || str_contains($adminBaseUrl, 'localhost')) {
+                    if (request()->getHost()) {
+                        $adminBaseUrl = request()->getSchemeAndHttpHost();
+                    }
+                }
+                $adminBaseUrl = rtrim($adminBaseUrl ?: 'http://ticketing-admin.stii.local', '/');
+                $viewUrl = "{$adminBaseUrl}/admin/my-tickets?search=".rawurlencode($detail->client_referenceNo);
+
+                try {
+                    $mailable = new TicketAssignedStaffNotificationMail(
+                        staffName: $staffUser?->name ?? $assignedStaffName,
+                        assignedBy: $assignedBy,
+                        tickets: [[
+                            'refNo' => $detail->client_referenceNo,
+                            'clientName' => $client?->client_name ?? 'Client',
+                            'division' => $client?->client_division_agency ?? null,
+                            'problem' => $detail->ticket_problem_that_needed_support ?? null,
+                            'ticketType' => $detail->ticket_type ?? 'Technical Support',
+                            'dateRequested' => $detail->date_requested ? Carbon::parse($detail->date_requested)->format('M d, Y h:i A') : null,
+                        ]],
+                        viewUrl: $viewUrl,
+                    );
+
+                    if (config('queue.default') === 'sync') {
+                        Mail::to($staffEmail)->send($mailable);
+                    } else {
+                        Mail::to($staffEmail)->queue($mailable);
+                    }
+                } catch (\Throwable $e) {
+                    Log::error('TicketAssignedStaffNotificationMail failed to send in update', [
+                        'staff' => $assignedStaffName,
+                        'to' => $staffEmail,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
         if ($request->wantsJson()) {
             return response()->json([
                 'success' => true,
@@ -358,7 +423,8 @@ class TicketStatusController extends Controller
         }
 
         // ✅ Authoritative server-side set
-        $update['ticket_attended_by'] = auth()->user()->name;   // or ->id / ->username
+        $staffName = auth()->user()?->name ?? 'IT Support Staff';
+        $update['ticket_attended_by'] = $staffName;
         // (optional) if you track timestamp:
         // $update['ticket_attended_at'] = now();
 
@@ -369,11 +435,74 @@ class TicketStatusController extends Controller
             'client_referenceNo' => $detail->client_referenceNo,
             'activity_name' => 'Ticket Attended',
             'activity_date' => Carbon::now(), // instead of Carbon::today()
-            'activity_user' => auth()->user()->name, // or username field
+            'activity_user' => $staffName,
         ]);
 
-        return back()->with('success', 'Ticket attended successfully and now in progress!');
+        // Look up client details for email notification
+        $ref = $detail->client_referenceNo;
+        $client = TicketClientDetail::where('client_referenceNo', $ref)->first();
+        $clientEmail = trim((string) ($client?->client_email ?? ''));
 
+        // Fallback to ticket_employees if client_email is missing but employee ID exists
+        if ($clientEmail === '' && ! empty($client?->client_empID)) {
+            $emp = DB::table('ticket_employees')
+                ->where('employee_code', $client->client_empID)
+                ->first();
+            if (! empty($emp?->email)) {
+                $clientEmail = trim((string) $emp->email);
+            }
+        }
+
+        $emailSent = false;
+        if ($clientEmail !== '' && filter_var($clientEmail, FILTER_VALIDATE_EMAIL)) {
+            $clientName = $client?->client_name ?? 'Client';
+            $problem = $detail->ticket_problem_that_needed_support;
+            $ticketType = $detail->ticket_type;
+
+            $clientAppUrl = config('app.client_url');
+            if (! $clientAppUrl) {
+                $host = request()->getHost();
+                if (str_contains($host, 'ticketing-admin.')) {
+                    $clientHost = str_replace('ticketing-admin.', 'ticketing.', $host);
+                    $scheme = request()->getScheme();
+                    $port = request()->getPort();
+                    $portStr = ($port && ! in_array($port, [80, 443])) ? ':'.$port : '';
+                    $clientAppUrl = "{$scheme}://{$clientHost}{$portStr}";
+                }
+            }
+            $baseUrl = $clientAppUrl ?: (request()->getHost() ? request()->getSchemeAndHttpHost() : config('app.url'));
+            $trackUrl = rtrim($baseUrl, '/').'/client?track='.rawurlencode($ref).'&open=1';
+
+            try {
+                $mailable = new TicketAttendedNotificationMail(
+                    refNo: $ref,
+                    clientName: $clientName,
+                    staffName: $staffName,
+                    trackUrl: $trackUrl,
+                    problem: $problem,
+                    ticketType: $ticketType,
+                );
+
+                if (config('queue.default') === 'sync') {
+                    Mail::to($clientEmail)->send($mailable);
+                } else {
+                    Mail::to($clientEmail)->queue($mailable);
+                }
+                $emailSent = true;
+            } catch (\Throwable $e) {
+                Log::error('TicketAttendedNotificationMail failed to send', [
+                    'ref' => $ref,
+                    'to' => $clientEmail,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $successMsg = $emailSent
+            ? 'Ticket attended successfully and client notified via email!'
+            : 'Ticket attended successfully and now in progress!';
+
+        return back()->with('success', $successMsg);
     }
 
     public function storeNew(Request $request)
@@ -388,11 +517,15 @@ class TicketStatusController extends Controller
             // Ticket
             'ticket_type' => 'required|string|max:255',
             'ticket_problem_that_needed_support' => 'required|string',
+            'ticket_assigned_staff' => 'nullable|string|max:255',
+            'ticket_attended_by' => 'nullable|string|max:255',
         ]);
 
         $actorName = auth()->user()->name ?? 'System';
+        $assignedStaff = $request->input('ticket_assigned_staff') ?: $actorName;
+        $attendedBy = $request->input('ticket_attended_by') ?: $assignedStaff;
 
-        $refNo = DB::transaction(function () use ($validated, $actorName) {
+        $refNo = DB::transaction(function () use ($validated, $actorName, $assignedStaff, $attendedBy) {
             // 1) Generate new reference number (YYYYMMDD-###)
             $refNo = $this->generateClientReferenceNo();
 
@@ -406,16 +539,16 @@ class TicketStatusController extends Controller
                 'client_referenceNo' => $refNo,
             ]);
 
-            // 3) Ticket details (status = In Progress; attended_by = logged-in user)
+            // 3) Ticket details (status = In Progress; attended_by = logged-in user or specified staff)
             TicketDetail::create([
                 'client_referenceNo' => $refNo,
                 'ticket_type' => $validated['ticket_type'],
-                'ticket_assigned_by' => 'Lloyd Mandapat',
-                'ticket_assigned_staff' => $actorName,
-                'ticket_attended_by' => $actorName,
+                'ticket_assigned_by' => $actorName,
+                'ticket_assigned_staff' => $assignedStaff,
+                'ticket_attended_by' => $attendedBy,
                 'ticket_status' => 'In Progress',
                 'ticket_problem_that_needed_support' => $validated['ticket_problem_that_needed_support'],
-                'date_requested' => Carbon::now(), // instead of Carbon::today()
+                'date_requested' => Carbon::now(),
             ]);
 
             // 4) Activity logs (Created, Assigned, Attended)
@@ -425,7 +558,7 @@ class TicketStatusController extends Controller
                     'client_referenceNo' => $refNo,
                     'activity_name' => 'Ticket Created',
                     'activity_date' => $now,
-                    'activity_user' => $actorName,
+                    'activity_user' => $validated['client_name'],
                 ],
                 [
                     'client_referenceNo' => $refNo,
@@ -437,7 +570,7 @@ class TicketStatusController extends Controller
                     'client_referenceNo' => $refNo,
                     'activity_name' => 'Ticket Attended',
                     'activity_date' => $now,
-                    'activity_user' => $actorName,
+                    'activity_user' => $attendedBy,
                 ],
             ]);
 
@@ -456,8 +589,14 @@ class TicketStatusController extends Controller
     {
         $prefix = Carbon::today()->format('Ymd');
 
-        // Get last sequence for today
-        $last = DB::table('v2_ticket_client_details')
+        $lastClient = DB::table('v2_ticket_client_details')
+            ->select('client_referenceNo')
+            ->where('client_referenceNo', 'like', "{$prefix}-%")
+            ->orderBy('client_referenceNo', 'desc')
+            ->lockForUpdate()
+            ->first();
+
+        $lastDetail = DB::table('v2_ticket_details')
             ->select('client_referenceNo')
             ->where('client_referenceNo', 'like', "{$prefix}-%")
             ->orderBy('client_referenceNo', 'desc')
@@ -465,11 +604,25 @@ class TicketStatusController extends Controller
             ->first();
 
         $nextSeq = 1;
-        if ($last && preg_match('/^'.$prefix.'-(\d{3})$/', $last->client_referenceNo, $m)) {
-            $nextSeq = (int) $m[1] + 1;
+        foreach ([$lastClient, $lastDetail] as $last) {
+            if ($last && preg_match('/^'.$prefix.'-(\d+)$/', $last->client_referenceNo, $m)) {
+                $seq = (int) $m[1] + 1;
+                if ($seq > $nextSeq) {
+                    $nextSeq = $seq;
+                }
+            }
         }
 
-        return sprintf('%s-%03d', $prefix, $nextSeq);
+        do {
+            $candidate = sprintf('%s-%03d', $prefix, $nextSeq);
+            $exists = DB::table('v2_ticket_client_details')->where('client_referenceNo', $candidate)->exists()
+                || DB::table('v2_ticket_details')->where('client_referenceNo', $candidate)->exists();
+            if ($exists) {
+                $nextSeq++;
+            }
+        } while ($exists);
+
+        return $candidate;
     }
 
     public function dashboardStats(Request $request)

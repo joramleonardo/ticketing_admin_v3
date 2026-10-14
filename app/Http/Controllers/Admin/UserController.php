@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
+use App\Models\TicketActivityLog;
+use App\Models\TicketDetail;
 use App\Models\User;
+use App\Services\StaffService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -95,7 +98,7 @@ class UserController extends Controller
             'inactive' => User::where('isActivated', '0')->count(),
         ];
 
-        return Inertia::render('admin/Users/Index', [
+        return Inertia::render('Admin/Users/Index', [
             'users' => $users,
             'summary' => $summary,
             'filters' => [
@@ -104,6 +107,7 @@ class UserController extends Controller
                 'status' => $status,
             ],
             'currentUserId' => Auth::id(),
+            'staffOptions' => app(StaffService::class)->getActiveStaffNames(),
         ]);
     }
 
@@ -163,7 +167,25 @@ class UserController extends Controller
             $updates['password'] = Hash::make($validated['password']);
         }
 
-        $user->update($updates);
+        DB::transaction(function () use ($user, $updates, $isActivated, $validated): void {
+            if ($isActivated === '0' && ! empty($validated['reassign_action'])) {
+                $this->reassignStaffWorkload(
+                    $user->name,
+                    $validated['reassign_action'],
+                    $validated['reassign_to'] ?? null,
+                    Auth::user()?->name ?? 'Super Admin'
+                );
+            }
+
+            // Keep assigned tickets in sync if staff name changed
+            if ($user->name !== $updates['name']) {
+                TicketDetail::where('ticket_assigned_staff', $user->name)
+                    ->whereIn('ticket_status', ['New', 'Pending', 'In Progress'])
+                    ->update(['ticket_assigned_staff' => $updates['name']]);
+            }
+
+            $user->update($updates);
+        });
 
         return back()->with('success', "User '{$user->name}' was updated successfully.");
     }
@@ -171,7 +193,7 @@ class UserController extends Controller
     /**
      * Toggle the active status of the specified user.
      */
-    public function toggleStatus(User $user): RedirectResponse
+    public function toggleStatus(Request $request, User $user): RedirectResponse
     {
         $this->authorizeSuperAdmin();
 
@@ -179,8 +201,25 @@ class UserController extends Controller
             return back()->withErrors(['error' => 'You cannot deactivate your own account.']);
         }
 
+        $validated = $request->validate([
+            'reassign_action' => ['nullable', 'string', 'in:reassign,unassign,keep'],
+            'reassign_to' => ['nullable', 'required_if:reassign_action,reassign', 'string', 'max:255'],
+        ]);
+
         $newStatus = ($user->isActivated === '0') ? '1' : '0';
-        $user->update(['isActivated' => $newStatus]);
+
+        DB::transaction(function () use ($user, $newStatus, $validated): void {
+            $user->update(['isActivated' => $newStatus]);
+
+            if ($newStatus === '0' && ! empty($validated['reassign_action'])) {
+                $this->reassignStaffWorkload(
+                    $user->name,
+                    $validated['reassign_action'],
+                    $validated['reassign_to'] ?? null,
+                    Auth::user()?->name ?? 'Super Admin'
+                );
+            }
+        });
 
         $statusLabel = $newStatus === '1' ? 'activated' : 'deactivated';
 
@@ -190,7 +229,7 @@ class UserController extends Controller
     /**
      * Remove the specified user from storage.
      */
-    public function destroy(User $user): RedirectResponse
+    public function destroy(Request $request, User $user): RedirectResponse
     {
         $this->authorizeSuperAdmin();
 
@@ -198,9 +237,84 @@ class UserController extends Controller
             return back()->withErrors(['error' => 'You cannot delete your own account.']);
         }
 
+        $validated = $request->validate([
+            'reassign_action' => ['nullable', 'string', 'in:reassign,unassign,keep'],
+            'reassign_to' => ['nullable', 'required_if:reassign_action,reassign', 'string', 'max:255'],
+        ]);
+
         $name = $user->name;
-        $user->delete();
+
+        DB::transaction(function () use ($user, $validated): void {
+            if (! empty($validated['reassign_action'])) {
+                $this->reassignStaffWorkload(
+                    $user->name,
+                    $validated['reassign_action'],
+                    $validated['reassign_to'] ?? null,
+                    Auth::user()?->name ?? 'Super Admin'
+                );
+            }
+
+            $user->delete();
+        });
 
         return back()->with('success', "User '{$name}' was deleted successfully.");
+    }
+
+    /**
+     * Reassign or unassign active tickets belonging to a staff member upon deactivation or deletion.
+     */
+    private function reassignStaffWorkload(string $fromStaffName, ?string $action, ?string $toStaffName, string $performedBy): int
+    {
+        $cleanFrom = trim($fromStaffName);
+        if ($cleanFrom === '' || empty($action) || $action === 'keep') {
+            return 0;
+        }
+
+        $openTickets = TicketDetail::query()
+            ->whereRaw('TRIM(ticket_assigned_staff) = ?', [$cleanFrom])
+            ->whereIn('ticket_status', ['New', 'Pending', 'In Progress'])
+            ->get();
+
+        if ($openTickets->isEmpty()) {
+            return 0;
+        }
+
+        $count = 0;
+
+        if ($action === 'reassign' && ! empty($toStaffName)) {
+            $cleanTo = trim($toStaffName);
+            foreach ($openTickets as $detail) {
+                $detail->update([
+                    'ticket_assigned_staff' => $cleanTo,
+                    'ticket_assigned_by' => $performedBy,
+                ]);
+
+                TicketActivityLog::create([
+                    'client_referenceNo' => $detail->client_referenceNo,
+                    'activity_name' => "Workload reassigned from {$cleanFrom} to {$cleanTo}",
+                    'activity_date' => now(),
+                    'activity_user' => $performedBy,
+                ]);
+                $count++;
+            }
+        } elseif ($action === 'unassign') {
+            foreach ($openTickets as $detail) {
+                $detail->update([
+                    'ticket_assigned_staff' => null,
+                    'ticket_status' => 'New',
+                    'ticket_assigned_by' => $performedBy,
+                ]);
+
+                TicketActivityLog::create([
+                    'client_referenceNo' => $detail->client_referenceNo,
+                    'activity_name' => "Workload unassigned to Triage Queue upon departure/deactivation of {$cleanFrom}",
+                    'activity_date' => now(),
+                    'activity_user' => $performedBy,
+                ]);
+                $count++;
+            }
+        }
+
+        return $count;
     }
 }

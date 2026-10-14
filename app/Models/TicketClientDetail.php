@@ -17,6 +17,7 @@ class TicketClientDetail extends Model
         'client_name',
         'client_division_agency',
         'client_empID',
+        'client_email',
         'client_sex',
         'client_referenceNo',
     ];

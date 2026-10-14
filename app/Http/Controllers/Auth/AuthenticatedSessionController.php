@@ -33,7 +33,14 @@ class AuthenticatedSessionController extends Controller
 
         $request->session()->regenerate();
 
-        return redirect()->intended(route('dashboard', absolute: false));
+        $user = Auth::user();
+        $defaultRoute = match ($user?->role) {
+            'Staff' => route('admin.my-tickets', absolute: false),
+            'Admin' => route('tickets-v2.index', absolute: false),
+            default => route('dashboard', absolute: false),
+        };
+
+        return redirect()->intended($defaultRoute);
     }
 
     /**

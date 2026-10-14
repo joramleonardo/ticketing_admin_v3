@@ -5,7 +5,7 @@
       <p class="text-xs text-gray-500 mt-0.5">Enter your Employee ID or Ticket Reference Number to check status and progress</p>
     </div>
 
-    <form @submit.prevent="trackTickets">
+    <form @submit.prevent="trackTickets(false)">
       <div class="relative w-full mb-3">
         <label for="employee_code" class="block uppercase text-blueGray-600 text-xs font-bold mb-2">
           Employee ID or Ticket Reference Number
@@ -223,6 +223,11 @@ import TicketSlaBadge from "@/Components/TicketSlaBadge.vue"
 import Modal_ViewDetails from "@/Pages/TicketsV2/ClientComponents/ModalAction_ViewDetails.vue"
 import Modal_RateTicket from "@/Pages/TicketsV2/ClientComponents/ModalAction_RateTicket.vue"
 
+const props = defineProps({
+  initialCode: { type: String, default: null },
+  autoOpen: { type: Boolean, default: false },
+})
+
 const employeeCode = ref("")
 const tickets = ref([])
 const loading = ref(false)
@@ -271,7 +276,7 @@ const closeRate = () => {
   selectedRef.value = null
   // Re-fetch tracked tickets to reflect newly closed/rated status
   if (employeeCode.value.trim()) {
-    trackTickets()
+    trackTickets(false)
   }
 }
 
@@ -287,7 +292,7 @@ const employeeLabel = computed(() => {
   return employeeCode.value || "Client"
 })
 
-const trackTickets = async () => {
+const trackTickets = async (shouldAutoOpen = false) => {
   errorMessage.value = ""
   tickets.value = []
   employee.value = null
@@ -306,6 +311,10 @@ const trackTickets = async () => {
     tickets.value = Array.isArray(data?.tickets) ? data.tickets : []
     employee.value = data?.employee || null
     searched.value = true
+
+    if (shouldAutoOpen && tickets.value.length === 1) {
+      openView(tickets.value[0].client_referenceNo)
+    }
   } catch (e) {
     errorMessage.value = "No records found matching this identifier or server error."
     searched.value = true
@@ -314,13 +323,21 @@ const trackTickets = async () => {
   }
 }
 
+watch(() => props.initialCode, (newCode) => {
+  if (newCode && newCode !== employeeCode.value) {
+    employeeCode.value = newCode
+    trackTickets(props.autoOpen)
+  }
+})
+
 onMounted(() => {
-  // Check if track query parameter was provided in URL
+  // Check if track query parameter or prop was provided
   const params = new URLSearchParams(window.location.search)
-  const trackQuery = params.get('track') || params.get('ref')
+  const trackQuery = props.initialCode || params.get('track') || params.get('ref')
+  const shouldOpen = props.autoOpen || params.get('open') === '1' || !!trackQuery
   if (trackQuery) {
     employeeCode.value = trackQuery
-    trackTickets()
+    trackTickets(shouldOpen)
   }
 })
 </script>

@@ -754,8 +754,9 @@ function attendTicket(row) {
     },
     {
       preserveScroll: true,
-      onSuccess: () => {
-        toast.success(`Ticket ${row.client_referenceNo} is now In Progress!`)
+      onSuccess: (page) => {
+        const flashMsg = page?.props?.flash?.success || `Ticket ${row.client_referenceNo} is now In Progress!`
+        toast.success(flashMsg)
         attendingRef.value = null
         if (row.detail) {
           row.detail.ticket_status = 'In Progress'
@@ -806,7 +807,10 @@ defineExpose({
 <template>
   <div class="relative flex flex-col min-w-0 break-words bg-white w-full shadow-sm rounded-2xl border border-slate-200">
     <!-- ── Card Top Header ─────────────────────────────────────────────── -->
-    <div class="relative z-40 rounded-t-2xl flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-200 gap-3 bg-white">
+    <div
+      class="rounded-t-2xl flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-200 gap-3 bg-white transition-all"
+      :class="showCreateMenu ? 'relative z-40' : 'relative z-20'"
+    >
       <div>
         <h3 class="font-bold text-base text-slate-900 tracking-tight flex items-center gap-2">
           <i class="fa-solid fa-list-check text-blue-600"></i>
@@ -859,7 +863,7 @@ defineExpose({
           <!-- Dropdown Menu -->
           <div
             v-if="showCreateMenu"
-            class="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 divide-y divide-slate-100"
+            class="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-30 divide-y divide-slate-100"
           >
             <div class="py-1">
               <button
@@ -908,7 +912,10 @@ defineExpose({
     </div>
 
     <!-- ── Option A: Segmented Status Control Bar & Workflow Presets ────── -->
-    <div class="bg-slate-50/70 border-b border-slate-200 px-5 py-2.5 relative z-30">
+    <div
+      class="bg-slate-50/70 border-b border-slate-200 px-5 py-2.5 transition-all"
+      :class="showPresetsMenu ? 'relative z-30' : 'relative z-10'"
+    >
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-0.5">
         <!-- Sleek Segmented Capsule Tabs (Linear / GitHub style) -->
         <div class="inline-flex items-center p-1 bg-slate-200/70 rounded-xl gap-0.5 overflow-x-auto shrink-0 select-none max-w-full">
@@ -1001,7 +1008,10 @@ defineExpose({
     </div>
 
     <!-- ── Option A: Unified 1-Row Filters Toolbar ─────────────────── -->
-    <div class="p-4 border-b border-slate-200 bg-white relative z-20">
+    <div
+      class="p-4 border-b border-slate-200 bg-white transition-all"
+      :class="showDateRangeMenu ? 'relative z-30' : 'relative z-10'"
+    >
       <div class="flex flex-col sm:flex-row sm:items-center gap-2.5 flex-wrap md:flex-nowrap">
         <!-- Search Input (expands to fill space) -->
         <div class="relative flex-1 min-w-[180px]">
@@ -1049,7 +1059,11 @@ defineExpose({
         </div>
 
         <!-- Unified Date Range Popover Button -->
-        <div class="relative w-full sm:w-44 shrink-0" v-click-outside="() => (showDateRangeMenu = false)">
+        <div
+          class="relative w-full sm:w-44 shrink-0"
+          :class="{ 'z-40': showDateRangeMenu }"
+          v-click-outside="() => (showDateRangeMenu = false)"
+        >
           <button
             type="button"
             @click="showDateRangeMenu = !showDateRangeMenu"
@@ -1298,7 +1312,7 @@ defineExpose({
     </div>
 
     <!-- ── Main Table ──────────────────────────────────────────────────── -->
-    <div class="relative z-10 block w-full overflow-x-auto">
+    <div class="relative z-0 block w-full overflow-x-auto">
       <table class="items-center w-full bg-transparent border-collapse">
         <thead>
           <tr
@@ -1471,7 +1485,7 @@ defineExpose({
                   <!-- Dropdown Popover -->
                   <div
                     v-if="activeRowMenuId === row.client_referenceNo"
-                    class="absolute right-0 w-52 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-40 divide-y divide-slate-100"
+                    class="absolute right-0 w-52 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-20 divide-y divide-slate-100"
                     :class="isNearBottom(index) ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
                   >
                     <div class="py-1">

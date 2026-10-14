@@ -1,12 +1,9 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { router } from '@inertiajs/vue3'
-import ModalNoRatingTicketDetails from '@/Pages/TicketsV2/ModalComponents/ModalTicketDetails_NoRating.vue'
-import ModalCompleteTicket from '@/Pages/TicketsV2/ModalComponents/ModalAction_CompleteTicket.vue'
-import ModalTicketDetails_Pending from '@/Pages/TicketsV2/ModalComponents/ModalTicketDetails_InProgress.vue'
+import ModalTicketDetails from '@/Pages/TicketsV2/ModalComponents/ModalTicketDetails.vue'
 
-
-const emit = defineEmits(['completed'])   // 👈 add this
+const emit = defineEmits(['completed'])
 
 const props = defineProps({
   tickets: {
@@ -61,52 +58,41 @@ const pageButtons = computed(() => {
   return out
 })
 
-const selected = ref(null)
-const showDetails = ref(false)
-function openDetails(row){
-  selected.value = row
-  showDetailsModal_Pending.value = true
-  console.log('Opening details for:', row)
+const DIVISION_MAP = Object.freeze({ 1: 'FAD', 2: 'IRAD', 3: 'CRPD', 4: 'OD-MISPS' })
+function mapDivision(val) {
+  const v = (val ?? '').toString().trim()
+  if (!v) return ''
+  const n = Number(v)
+  if (Number.isFinite(n) && DIVISION_MAP[n]) return DIVISION_MAP[n]
+  const up = v.toUpperCase()
+  if (['FAD', 'IRAD', 'CRPD', 'OD-MISPS'].includes(up)) return up
+  return up
+}
 
+const selected = ref(null)
+const showDetailsModal = ref(false)
+
+function openDetails(row) {
+  selected.value = row
+  showDetailsModal.value = true
+}
+
+function closeDetailsModal() {
+  showDetailsModal.value = false
+  selected.value = null
+}
+
+function handleTicketUpdated(data) {
+  refresh()
+  if (data?.status === 'Completed') {
+    emit('completed', { id: data.id })
+  }
 }
 
 function refresh() {
   router.reload({ only: ['myInProgTickets'] })
   currentPage.value = 1
 }
-
-// ── Complete Ticket ───────────────────────────
-const showCompleteModal = ref(false)
-const selectedTicket = ref(null)
-function openCompleteModal(row) {
-    console.log('Opening Complete Ticket modal for:', selectedTicket)
-    selectedTicket.value = row
-    showCompleteModal.value = true
-}
-const staffOptions = [
-  'Etienne Wayne Amparado',
-  'Mc Gyver Basaya',
-  'Michael Binondo',
-  'John Michael Cagadas',
-  'Chester Francisco',
-  'Aerone Dominhick Sebastian',
-  'Joram Kate Leonardo',
-  'Lloyd Mandapat',
-  'Jomar Rabanera',
-  'Mark Jayson Sison'
-]
-
-        function handleCompleteSuccess({ id }) {
-          showCompleteModal.value = false
-          // tell the page parent to refresh everything (NewTickets + AllMyTickets)
-          emit('completed', { id })
-        }
-
-const showDetailsModal_Pending = ref(false)
-
-
-function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; selected.value = null }
-
 </script>
 
 <template>
@@ -139,10 +125,10 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
               Reference No.
             </th>
             <th class="px-4 py-2.5 text-xs uppercase font-semibold text-left">
-              Client Name
+              Client & Details
             </th>
-            <th class="px-4 py-2.5 text-xs uppercase font-semibold text-right">
-              Action
+            <th class="w-10 px-4 py-2.5 text-xs uppercase font-semibold text-right">
+              <span class="sr-only">Action</span>
             </th>
           </tr>
         </thead>
@@ -158,34 +144,39 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
             </td>
           </tr>
 
-          <tr v-for="t in pageSlice" :key="t.client_referenceNo" class="hover:bg-blue-50/40 transition-colors">
-            <td class="px-4 py-2.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-              {{ t.client_referenceNo }}
+          <tr
+            v-for="t in pageSlice"
+            :key="t.client_referenceNo"
+            class="hover:bg-blue-50/50 cursor-pointer transition-colors group"
+            @click="openDetails(t)"
+            title="Click to view details & complete ticket"
+          >
+            <td class="px-4 py-3 text-xs whitespace-nowrap align-middle">
+              <span class="font-mono font-bold text-blue-700 bg-blue-50 group-hover:bg-blue-100/80 px-2 py-0.5 rounded-md border border-blue-200/60 transition-colors">
+                {{ t.client_referenceNo }}
+              </span>
             </td>
-            <td class="px-4 py-2.5 text-xs text-slate-600 truncate max-w-[150px]">
-              {{ t.client_name || '-' }}
-            </td>
-            <td class="px-4 py-2.5 text-xs text-right whitespace-nowrap">
-              <div class="inline-flex items-center gap-1.5 justify-end">
-                <button
-                  type="button"
-                  title="View Details"
-                  class="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition"
-                  @click="openDetails(t)"
+            <td class="px-4 py-3 text-xs align-middle">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="font-semibold text-slate-800 group-hover:text-blue-900 transition-colors">
+                  {{ t.client_name || '-' }}
+                </span>
+                <span
+                  v-if="mapDivision(t.client_division_agency || t.detail?.client_division_agency)"
+                  class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200/60"
                 >
-                  <i class="fa-solid fa-eye text-xs"></i>
-                </button>
-
-                <button
-                  type="button"
-                  title="Mark as Complete"
-                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-2xs transition"
-                  @click="openCompleteModal(t)"
-                >
-                  <i class="fa-solid fa-circle-check text-xs"></i>
-                  <span>Complete</span>
-                </button>
+                  {{ mapDivision(t.client_division_agency || t.detail?.client_division_agency) }}
+                </span>
               </div>
+              <p
+                v-if="t.ticket_problem_that_needed_support || t.detail?.ticket_problem_that_needed_support"
+                class="text-[11px] text-slate-500 line-clamp-1 mt-0.5 max-w-xs sm:max-w-md"
+              >
+                {{ t.ticket_problem_that_needed_support || t.detail?.ticket_problem_that_needed_support }}
+              </p>
+            </td>
+            <td class="w-10 px-4 py-3 text-xs text-right whitespace-nowrap align-middle">
+              <i class="fa-solid fa-chevron-right text-[11px] text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all"></i>
             </td>
           </tr>
         </tbody>
@@ -201,14 +192,14 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
 
       <div class="flex items-center gap-1">
         <button
-          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
+          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
           :disabled="currentPage === 1"
           @click="goFirst"
           aria-label="First page"
         >« First</button>
 
         <button
-          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
+          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
           :disabled="currentPage === 1"
           @click="goPrev"
           aria-label="Previous page"
@@ -217,7 +208,7 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
         <template v-for="p in pageButtons" :key="`p-${p}`">
           <button
             v-if="p !== '…'"
-            class="px-2 py-1 text-xs border rounded-md font-medium"
+            class="px-2 py-1 text-xs border rounded-md font-medium cursor-pointer"
             :class="p === currentPage ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
             @click="goTo(p)"
           >{{ p }}</button>
@@ -225,14 +216,14 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
         </template>
 
         <button
-          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
+          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
           :disabled="currentPage === totalPages"
           @click="goNext"
           aria-label="Next page"
         >Next ›</button>
 
         <button
-          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
+          class="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
           :disabled="currentPage === totalPages"
           @click="goLast"
           aria-label="Last page"
@@ -240,26 +231,14 @@ function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; s
       </div>
     </div>
 
-    <ModalTicketDetails_Pending
-      :show="showDetailsModal_Pending"
+    <!-- Unified Ticket Details & Completion Drawer/Modal -->
+    <ModalTicketDetails
+      :show="showDetailsModal"
       :ticket="selected"
       :from-my-ticket="true"
-      @close="closeDetailsModal_Pending"
+      :allow-status-change="true"
+      @close="closeDetailsModal"
+      @updated="handleTicketUpdated"
     />
   </div>
-
-  <!-- Complete Ticket modal -->
-  <ModalCompleteTicket
-    :show="showCompleteModal"
-    :ticket="selectedTicket"
-    :staff-list="staffOptions"
-    :subcategories="{
-      Hardware: ['Troubleshooting','Evaluation','Network','Testing','Consultation','Assistance','Others'],
-      Software: ['Installation','Data Retrieval','Virus/Malwares','Data Conversion/Uploading/Processing','Reformat','Download','Assistance','Others'],
-      'Hardware & Software': ['Troubleshooting','Evaluation','Network','Testing','Consultation','Assistance','Installation','Data Retrieval','Virus/Malwares','Data Conversion/Uploading/Processing','Reformat','Download','Assistance','Others'],
-      'System Modification': []
-    }"
-    @close="showCompleteModal = false"
-    @success="handleCompleteSuccess"
-  />
 </template>

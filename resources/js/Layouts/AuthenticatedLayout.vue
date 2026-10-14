@@ -288,9 +288,53 @@ const userEmail = computed(() => {
   return page.props?.auth?.user?.email || ''
 })
 
+const badgeCounts = computed(() => {
+  return page.props?.auth?.badges || { unassigned: 0, my_active: 0 }
+})
+
+const roleTheme = computed(() => {
+  switch (userRole.value) {
+    case 'Super Admin':
+      return {
+        label: 'Super Admin',
+        title: 'Executive Administration',
+        badgeIcon: '👑',
+        badgeText: 'SUPER ADMIN',
+        badgeClass: 'bg-purple-950/70 text-purple-300 border-purple-800/80 ring-1 ring-purple-500/30',
+        topStripeClass: 'bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-600',
+        activeTabAccentClass: 'bg-purple-400 dark:bg-purple-400',
+      }
+    case 'Admin':
+      return {
+        label: 'Admin',
+        title: 'Admin Dispatcher',
+        badgeIcon: '🛡️',
+        badgeText: 'ADMIN DISPATCHER',
+        badgeClass: 'bg-blue-950/70 text-blue-300 border-blue-700/80 ring-1 ring-blue-500/30',
+        topStripeClass: 'bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-500',
+        activeTabAccentClass: 'bg-blue-400 dark:bg-blue-400',
+      }
+    case 'Staff':
+    default:
+      return {
+        label: 'Staff',
+        title: 'Staff Specialist',
+        badgeIcon: '⚡',
+        badgeText: 'STAFF SPECIALIST',
+        badgeClass: 'bg-emerald-950/70 text-emerald-300 border-emerald-700/80 ring-1 ring-emerald-500/30',
+        topStripeClass: 'bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500',
+        activeTabAccentClass: 'bg-emerald-400 dark:bg-emerald-400',
+      }
+  }
+})
+
 const currentBreadcrumb = computed(() => {
   const url = page.url || ''
-  if (url.startsWith('/dashboard')) return { section: 'Overview', title: 'Dashboard' }
+  if (url.startsWith('/dashboard')) {
+    if (userRole.value === 'Super Admin') return { section: 'Overview', title: 'Executive Overview' }
+    if (userRole.value === 'Admin') return { section: 'Overview', title: 'Triage & Queue' }
+    return { section: 'Overview', title: 'Personal Dashboard' }
+  }
   if (url.startsWith('/admin/tickets-v2') || url.startsWith('/tickets-v2') || url.startsWith('/all-tickets')) {
     return { section: 'Tickets', title: 'All Tickets' }
   }
@@ -302,16 +346,154 @@ const currentBreadcrumb = computed(() => {
   return { section: 'Support', title: 'IT Helpdesk' }
 })
 
-// Tab navigation configuration
+// Tab navigation configuration curated by user role
 const navTabs = computed(() => {
-  const tabs = [
+  const role = userRole.value
+  const badges = badgeCounts.value
+
+  // Staff Specialist Tab Ordering:
+  // 1. My Tickets (Primary work queue)
+  // 2. Personal Productivity Dashboard
+  // 3. All Tickets
+  // 4. Customer Ratings
+  // 5. Settings
+  if (role === 'Staff') {
+    return [
+      {
+        name: 'My Tickets',
+        label: 'My Tickets',
+        route: 'admin.my-tickets',
+        href: route('admin.my-tickets'),
+        active: route().current('admin.my-tickets') || page.url.startsWith('/admin/my-tickets'),
+        icon: 'user',
+        badge: badges.my_active > 0 ? `${badges.my_active} Active` : null,
+        badgeVariant: 'primary',
+        badgeTooltip: `${badges.my_active} active tickets assigned to you`,
+      },
+      {
+        name: 'Dashboard',
+        label: 'My Dashboard',
+        route: 'dashboard',
+        href: route('dashboard'),
+        active: route().current('dashboard') && !page.url.startsWith('/admin/my-tickets'),
+        icon: 'dashboard',
+      },
+      {
+        name: 'All Tickets',
+        label: 'All Tickets',
+        route: 'tickets-v2.index',
+        href: route('tickets-v2.index'),
+        active: route().current('tickets-v2.*') || page.url.startsWith('/admin/tickets-v2'),
+        icon: 'tickets',
+      },
+      {
+        name: 'Customer Ratings',
+        label: 'Customer Ratings',
+        route: 'ratings.dashboard',
+        href: route('ratings.dashboard'),
+        active: route().current('ratings.*') || page.url.startsWith('/ratings'),
+        icon: 'star',
+      },
+      {
+        name: 'Settings',
+        label: 'Settings',
+        route: 'profile.edit',
+        href: route('profile.edit'),
+        active: route().current('profile.*'),
+        icon: 'settings',
+      },
+    ]
+  }
+
+  // Admin Dispatcher Tab Ordering:
+  // 1. All Tickets (Primary queue with unassigned badge)
+  // 2. Triage & Queue Dashboard
+  // 3. My Tickets (with assigned to me badge if any)
+  // 4. Customer Ratings
+  // 5. CSM Reports
+  // 6. Settings
+  if (role === 'Admin') {
+    return [
+      {
+        name: 'All Tickets',
+        label: 'All Tickets',
+        route: 'tickets-v2.index',
+        href: route('tickets-v2.index'),
+        active: route().current('tickets-v2.*') || page.url.startsWith('/admin/tickets-v2'),
+        icon: 'tickets',
+        badge: badges.unassigned > 0 ? `${badges.unassigned} New` : null,
+        badgeVariant: 'danger',
+        badgeTooltip: `${badges.unassigned} unassigned tickets awaiting dispatch`,
+      },
+      {
+        name: 'Dashboard',
+        label: 'Triage & Queue',
+        route: 'dashboard',
+        href: route('dashboard'),
+        active: route().current('dashboard'),
+        icon: 'dashboard',
+      },
+      {
+        name: 'My Tickets',
+        label: 'My Tickets',
+        route: 'admin.my-tickets',
+        href: route('admin.my-tickets'),
+        active: route().current('admin.my-tickets') || page.url.startsWith('/admin/my-tickets'),
+        icon: 'user',
+        badge: badges.my_active > 0 ? `${badges.my_active}` : null,
+        badgeVariant: 'primary',
+        badgeTooltip: `${badges.my_active} active tickets assigned to you`,
+      },
+      {
+        name: 'Customer Ratings',
+        label: 'Customer Ratings',
+        route: 'ratings.dashboard',
+        href: route('ratings.dashboard'),
+        active: route().current('ratings.*') || page.url.startsWith('/ratings'),
+        icon: 'star',
+      },
+      {
+        name: 'CSM Reports',
+        label: 'CSM Reports',
+        route: 'reports.no-csm-all',
+        href: route().has('reports.no-csm-all') ? route('reports.no-csm-all') : '#',
+        active: route().current('reports.*') || page.url.startsWith('/csm') || page.url.startsWith('/reports'),
+        icon: 'report',
+      },
+      {
+        name: 'Settings',
+        label: 'Settings',
+        route: 'profile.edit',
+        href: route('profile.edit'),
+        active: route().current('profile.*'),
+        icon: 'settings',
+      },
+    ]
+  }
+
+  // Super Admin Tab Ordering:
+  // 1. Executive Overview Dashboard
+  // 2. Users & Roles (Exclusive administration)
+  // 3. All Tickets (with unassigned counter)
+  // 4. Customer Ratings
+  // 5. CSM Reports
+  // 6. Settings
+  return [
     {
       name: 'Dashboard',
-      label: 'Dashboard',
+      label: 'Executive Overview',
       route: 'dashboard',
       href: route('dashboard'),
       active: route().current('dashboard'),
       icon: 'dashboard',
+    },
+    {
+      name: 'User Management',
+      label: 'Users & Roles',
+      route: 'admin.users.index',
+      href: route('admin.users.index'),
+      active: route().current('admin.users.*') || page.url.startsWith('/admin/users'),
+      icon: 'users',
     },
     {
       name: 'All Tickets',
@@ -320,34 +502,10 @@ const navTabs = computed(() => {
       href: route('tickets-v2.index'),
       active: route().current('tickets-v2.*') || page.url.startsWith('/admin/tickets-v2'),
       icon: 'tickets',
+      badge: badges.unassigned > 0 ? `${badges.unassigned}` : null,
+      badgeVariant: 'danger',
+      badgeTooltip: `${badges.unassigned} unassigned tickets awaiting dispatch`,
     },
-  ]
-
-  // Super Admin does not receive tickets, so hide 'My Tickets'
-  if (userRole.value !== 'Super Admin') {
-    tabs.push({
-      name: 'My Tickets',
-      label: 'My Tickets',
-      route: 'admin.my-tickets',
-      href: route('admin.my-tickets'),
-      active: route().current('admin.my-tickets') || page.url.startsWith('/admin/my-tickets'),
-      icon: 'user',
-    })
-  }
-
-  // Super Admin exclusive User & Role Management Tab
-  if (userRole.value === 'Super Admin') {
-    tabs.push({
-      name: 'User Management',
-      label: 'Users & Roles',
-      route: 'admin.users.index',
-      href: route('admin.users.index'),
-      active: route().current('admin.users.*') || page.url.startsWith('/admin/users'),
-      icon: 'users',
-    })
-  }
-
-  tabs.push(
     {
       name: 'Customer Ratings',
       label: 'Customer Ratings',
@@ -371,10 +529,8 @@ const navTabs = computed(() => {
       href: route('profile.edit'),
       active: route().current('profile.*'),
       icon: 'settings',
-    }
-  )
-
-  return tabs
+    },
+  ]
 })
 </script>
 
@@ -382,7 +538,9 @@ const navTabs = computed(() => {
   <div class="min-h-screen bg-slate-100 dark:bg-neutral-950 flex flex-col text-slate-800 dark:text-neutral-200 antialiased font-sans">
 
     <!-- ── 1. GITHUB TOP GLOBAL NAVBAR ──────────────────────────────────────── -->
-    <header class="sticky top-0 z-40 bg-blue-950 dark:bg-blue-950 border-b border-blue-900/80 transition-colors shadow-xs">
+    <header class="sticky top-0 z-50 bg-blue-950 dark:bg-blue-950 border-b border-blue-900/80 transition-colors shadow-xs">
+      <!-- Role Visual Identity Accent Stripe -->
+      <div class="h-1 w-full" :class="roleTheme.topStripeClass"></div>
       <div class="relative z-20 w-full max-w-[1720px] mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-3">
 
         <!-- Left: Hamburger Toggle + Logo + Breadcrumbs -->
@@ -424,10 +582,7 @@ const navTabs = computed(() => {
               {{ currentBreadcrumb.title }}
             </span>
 
-            <!-- Private / Internal Badge -->
-            <span class="hidden md:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide border border-blue-800 bg-blue-900/60 text-blue-200">
-              Internal
-            </span>
+
           </div>
         </div>
 
@@ -553,23 +708,29 @@ const navTabs = computed(() => {
         </div>
 
         <!-- Right: Actions & User Profile -->
-        <div class="flex items-center gap-2 sm:gap-3 shrink-0">
-          <!-- User Role Badge -->
-          <span
-            class="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-wide uppercase border"
-            :class="userRole === 'Admin' || userRole === 'Super Admin'
-              ? 'bg-purple-950/60 text-purple-300 border-purple-800/80 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800'
-              : 'bg-blue-900/60 text-blue-200 border-blue-700/80'"
+        <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <!-- Quick Action: Sound Alert Toggle for Staff -->
+          <button
+            v-if="userRole === 'Staff'"
+            type="button"
+            @click="toggleSoundAlerts"
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition shadow-2xs cursor-pointer shrink-0"
+            :class="soundAlertsActive
+              ? 'border-emerald-600 bg-emerald-950/80 text-emerald-200 hover:bg-emerald-900/90'
+              : 'border-blue-900/70 bg-blue-950/80 text-blue-300/60 hover:text-blue-200 hover:bg-blue-900/40'"
+            :title="soundAlertsActive ? 'Sound notifications active (Click to mute)' : 'Sound notifications muted (Click to unmute)'"
+            aria-label="Toggle Sound Notifications"
           >
-            {{ userRole }}
-          </span>
+            <i :class="soundAlertsActive ? 'fa-solid fa-volume-high text-emerald-400' : 'fa-solid fa-volume-xmark text-slate-400'"></i>
+            <span class="hidden md:inline">{{ soundAlertsActive ? 'Chime On' : 'Muted' }}</span>
+          </button>
 
           <!-- Public Client Tracker Portal Link -->
           <a
             href="/client"
             target="_blank"
             rel="noopener noreferrer"
-            class="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-blue-800 bg-blue-900/40 text-blue-100 hover:bg-blue-800/60 transition"
+            class="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-blue-800 bg-blue-900/40 text-blue-100 hover:bg-blue-800/60 transition"
             title="Open client ticket tracker & submission portal in new tab"
           >
             <span>Client Tracker</span>
@@ -637,10 +798,23 @@ const navTabs = computed(() => {
 
               <span>{{ tab.label }}</span>
 
+              <!-- Live Counter Badge -->
+              <span
+                v-if="tab.badge"
+                class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold tracking-tight shadow-xs transition"
+                :class="tab.badgeVariant === 'danger'
+                  ? 'bg-rose-600 text-white ring-1 ring-rose-400/40'
+                  : 'bg-emerald-600 text-white ring-1 ring-emerald-400/40'"
+                :title="tab.badgeTooltip || tab.label"
+              >
+                {{ tab.badge }}
+              </span>
+
               <!-- Active Tab Theme Indicator Accent -->
               <span
                 v-if="tab.active"
-                class="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400 dark:bg-blue-400 rounded-t-sm shadow-xs"
+                class="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-sm shadow-xs"
+                :class="roleTheme.activeTabAccentClass"
               ></span>
             </Link>
           </nav>
@@ -683,14 +857,14 @@ const navTabs = computed(() => {
     <!-- Drawer Overlay Backdrop -->
     <div
       v-if="isDrawerOpen"
-      class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs transition-opacity"
+      class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-xs transition-opacity"
       @click="closeDrawer"
       aria-hidden="true"
     ></div>
 
     <!-- Drawer Panel (Slides out from left) -->
     <aside
-      class="fixed top-0 bottom-0 left-0 z-50 w-80 max-w-[85vw] bg-white dark:bg-[#0d1117] border-r border-slate-200 dark:border-neutral-800 shadow-2xl flex flex-col transition-transform duration-200 ease-in-out"
+      class="fixed top-0 bottom-0 left-0 z-[60] w-80 max-w-[85vw] bg-white dark:bg-[#0d1117] border-r border-slate-200 dark:border-neutral-800 shadow-2xl flex flex-col transition-transform duration-200 ease-in-out"
       :class="isDrawerOpen ? 'translate-x-0' : '-translate-x-full'"
       role="dialog"
       aria-modal="true"
@@ -704,7 +878,7 @@ const navTabs = computed(() => {
           </div>
           <div>
             <h2 class="text-sm font-bold text-slate-900 dark:text-white leading-tight">Ticketing System</h2>
-            <p class="text-[11px] text-slate-500 dark:text-neutral-400">IT Support Administration</p>
+            <p class="text-[11px] text-slate-500 dark:text-neutral-400">{{ roleTheme.title }}</p>
           </div>
         </div>
 
@@ -733,21 +907,34 @@ const navTabs = computed(() => {
               :key="item.name"
               :href="item.href"
               @click="closeDrawer"
-              class="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition"
+              class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-xs font-medium transition"
               :class="item.active
                 ? 'bg-blue-50 text-blue-700 font-semibold dark:bg-blue-950/80 dark:text-blue-300'
                 : 'text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-800/60 hover:text-slate-900 dark:hover:text-white'"
             >
-              <span :class="item.active ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-neutral-500'">
-                <svg v-if="item.icon === 'dashboard'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
-                <svg v-else-if="item.icon === 'tickets'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z" /></svg>
-                <svg v-else-if="item.icon === 'user'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                <svg v-else-if="item.icon === 'star'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-                <svg v-else-if="item.icon === 'report'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                <svg v-else-if="item.icon === 'settings'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                <svg v-else-if="item.icon === 'users'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+              <div class="flex items-center gap-3 min-w-0">
+                <span :class="item.active ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-neutral-500'">
+                  <svg v-if="item.icon === 'dashboard'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+                  <svg v-else-if="item.icon === 'tickets'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z" /></svg>
+                  <svg v-else-if="item.icon === 'user'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                  <svg v-else-if="item.icon === 'star'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+                  <svg v-else-if="item.icon === 'report'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  <svg v-else-if="item.icon === 'settings'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                  <svg v-else-if="item.icon === 'users'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                </span>
+                <span class="truncate">{{ item.label }}</span>
+              </div>
+
+              <!-- Live Counter Badge in Drawer -->
+              <span
+                v-if="item.badge"
+                class="px-2 py-0.5 text-[10px] font-bold rounded-full shrink-0"
+                :class="item.badgeVariant === 'danger'
+                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 border border-rose-300 dark:border-rose-800'
+                  : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'"
+              >
+                {{ item.badge }}
               </span>
-              <span>{{ item.label }}</span>
             </Link>
           </div>
         </div>
@@ -783,7 +970,12 @@ const navTabs = computed(() => {
           </div>
           <div class="min-w-0">
             <p class="text-xs font-semibold text-slate-900 dark:text-white truncate">{{ userName }}</p>
-            <p class="text-[10px] text-slate-500 truncate">{{ userEmail }}</p>
+            <div class="flex items-center gap-1 mt-0.5">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border select-none" :class="roleTheme.badgeClass">
+                {{ roleTheme.badgeIcon }} {{ roleTheme.label }}
+              </span>
+            </div>
+            <p class="text-[10px] text-slate-500 truncate mt-0.5">{{ userEmail }}</p>
           </div>
         </div>
 

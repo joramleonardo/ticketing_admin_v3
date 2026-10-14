@@ -32,6 +32,8 @@ class UpdateUserRequest extends FormRequest
             'password' => ['nullable', 'string', 'min:8', 'confirmed'],
             'role' => ['required', 'string', 'in:Super Admin,Admin,Staff'],
             'isActivated' => ['required', 'in:1,0,true,false'],
+            'reassign_action' => ['nullable', 'string', 'in:reassign,unassign,keep'],
+            'reassign_to' => ['nullable', 'required_if:reassign_action,reassign', 'string', 'max:255'],
         ];
     }
 }

@@ -1,12 +1,29 @@
 
 <script setup>
-    import { ref } from "vue"
+    import { ref, onMounted, watch } from "vue"
     import ClientCreate from "@/Pages/TicketsV2/ClientComponents/ClientCreate.vue"
     import ClientTrack from "@/Pages/TicketsV2/ClientComponents/ClientTrack.vue"
 
+    const props = defineProps({
+        initialView: { type: String, default: 'create' },
+        initialCode: { type: String, default: null },
+        autoOpen: { type: Boolean, default: false },
+    })
+
     // Track which view is active
-    // Default tab: create
-    const activeView = ref("create")
+    // Default tab: create, or track if requested via props or URL
+    const activeView = ref(props.initialView || "create")
+
+    watch(() => props.initialView, (v) => {
+        if (v) activeView.value = v
+    })
+
+    onMounted(() => {
+        const params = new URLSearchParams(window.location.search)
+        if (props.initialView === 'track' || params.get('tab') === 'track' || params.has('track') || params.has('ref')) {
+            activeView.value = 'track'
+        }
+    })
 </script>
 
 
@@ -48,7 +65,11 @@
                         </div>
                     </div>
                     <ClientCreate v-if="activeView === 'create'" />
-                    <ClientTrack v-if="activeView === 'track'" />
+                    <ClientTrack
+                        v-if="activeView === 'track'"
+                        :initial-code="initialCode"
+                        :auto-open="autoOpen"
+                    />
                     <!-- Request Form or Tracking Form -->
                     <!-- Display here-->
                 </div>

@@ -478,7 +478,7 @@ it('filters tickets by quick date preset and custom date range', function (): vo
     );
 });
 
-it('allows admin to bulk delete tickets and logs', function (): void {
+it('allows admin to bulk delete tickets and all related records including messages', function (): void {
     $admin = User::factory()->create(['role' => 'Admin']);
     $staff = User::factory()->create(['role' => 'Staff']);
 
@@ -500,6 +500,19 @@ it('allows admin to bulk delete tickets and logs', function (): void {
         ['client_referenceNo' => $ref2, 'activity_name' => 'Created', 'activity_date' => now()],
     ]);
 
+    DB::table('v2_ticket_messages')->insert([
+        ['client_referenceNo' => $ref1, 'sender_type' => 'client', 'sender_name' => 'Client 1', 'message' => 'Hello support'],
+        ['client_referenceNo' => $ref2, 'sender_type' => 'staff', 'sender_name' => 'Staff 1', 'message' => 'We are working on it'],
+    ]);
+
+    DB::table('v2_ticket_events')->insert([
+        ['client_referenceNo' => $ref1, 'event_start_date' => now()->toDateString(), 'event_venue' => 'Main Hall'],
+    ]);
+
+    DB::table('v2_ticket_rating_details')->insert([
+        ['client_referenceNo' => $ref2, 'rating_status' => 'Received', 'rating_result' => 'Excellent'],
+    ]);
+
     // Non-admin should be forbidden
     $respForbidden = $this->actingAs($staff)->postJson('/admin/tickets-v2/bulk-delete', [
         'ticket_ids' => [$ref1, $ref2],
@@ -515,7 +528,10 @@ it('allows admin to bulk delete tickets and logs', function (): void {
 
     expect(DB::table('v2_ticket_client_details')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
         ->and(DB::table('v2_ticket_details')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
-        ->and(DB::table('v2_ticket_activity_logs')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0);
+        ->and(DB::table('v2_ticket_activity_logs')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
+        ->and(DB::table('v2_ticket_messages')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
+        ->and(DB::table('v2_ticket_events')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
+        ->and(DB::table('v2_ticket_rating_details')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0);
 });
 
 it('loads ticket messages count and latest message for all tickets table', function (): void {
@@ -713,14 +729,16 @@ it('preserves division and search filters when recalculating status counts durin
         ->and($crpdCounts['New'])->toBe(0);
 });
 
-it('allows Super Admin and Admin to delete a single ticket and returns json', function (): void {
-    $superAdmin = User::factory()->create([
-        'name' => 'Super Admin User',
-        'role' => 'Super Admin',
+it('allows Super Admin and Admin to delete a single ticket and all related records including messages', function (): void {
+    $admin = User::factory()->create([
+        'name' => 'Admin User',
+        'role' => 'Admin',
     ]);
 
+    $ref = '20261013-DEL1';
+
     $clientId = DB::table('v2_ticket_client_details')->insertGetId([
-        'client_referenceNo' => '20261013-DEL1',
+        'client_referenceNo' => $ref,
         'client_name' => 'Delete Target Client',
         'client_division_agency' => '1',
         'created_at' => now(),
@@ -728,19 +746,46 @@ it('allows Super Admin and Admin to delete a single ticket and returns json', fu
 
     DB::table('v2_ticket_details')->insert([
         'ticket_id' => $clientId,
-        'client_referenceNo' => '20261013-DEL1',
+        'client_referenceNo' => $ref,
         'ticket_type' => 'Technical Support',
         'ticket_status' => 'New',
         'date_requested' => now(),
         'created_at' => now(),
     ]);
 
-    $response = $this->actingAs($superAdmin)->deleteJson("/admin/tickets-v2/{$clientId}");
+    DB::table('v2_ticket_activity_logs')->insert([
+        'client_referenceNo' => $ref,
+        'activity_name' => 'Created',
+        'activity_date' => now(),
+    ]);
+
+    DB::table('v2_ticket_messages')->insert([
+        ['client_referenceNo' => $ref, 'sender_type' => 'client', 'sender_name' => 'Client', 'message' => 'Help me please'],
+        ['client_referenceNo' => $ref, 'sender_type' => 'staff', 'sender_name' => 'Admin User', 'message' => 'Sure thing'],
+    ]);
+
+    DB::table('v2_ticket_events')->insert([
+        'client_referenceNo' => $ref,
+        'event_start_date' => now()->toDateString(),
+        'event_venue' => 'Room 101',
+    ]);
+
+    DB::table('v2_ticket_rating_details')->insert([
+        'client_referenceNo' => $ref,
+        'rating_status' => 'Received',
+        'rating_result' => 'Excellent',
+    ]);
+
+    $response = $this->actingAs($admin)->deleteJson("/admin/tickets-v2/{$clientId}");
     $response->assertSuccessful()
         ->assertJsonPath('success', true);
 
     expect(DB::table('v2_ticket_client_details')->where('client_id', $clientId)->exists())->toBeFalse()
-        ->and(DB::table('v2_ticket_details')->where('client_referenceNo', '20261013-DEL1')->exists())->toBeFalse();
+        ->and(DB::table('v2_ticket_details')->where('client_referenceNo', $ref)->exists())->toBeFalse()
+        ->and(DB::table('v2_ticket_activity_logs')->where('client_referenceNo', $ref)->exists())->toBeFalse()
+        ->and(DB::table('v2_ticket_messages')->where('client_referenceNo', $ref)->exists())->toBeFalse()
+        ->and(DB::table('v2_ticket_events')->where('client_referenceNo', $ref)->exists())->toBeFalse()
+        ->and(DB::table('v2_ticket_rating_details')->where('client_referenceNo', $ref)->exists())->toBeFalse();
 });
 
 it('returns matching tickets for the global navbar quick search endpoint', function (): void {

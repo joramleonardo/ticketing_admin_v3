@@ -72,13 +72,14 @@ async function attendTicketAction(ticketId) {
     },
     {
       preserveScroll: true,
-      onSuccess: () => {
+      onSuccess: (page) => {
         // 1) Optimistic UI: remove the ticket from local list
         items.value = items.value.filter(t => t.ticket_id !== ticketId)
 
         // 2) Notify + emit
-         toast.success('Ticket attended successfully and now in progress!')
-         router.reload({
+        const flashMsg = page?.props?.flash?.success || 'Ticket attended successfully and now in progress!'
+        toast.success(flashMsg)
+        router.reload({
            only: ['myNewTickets','myInProgTickets','ticketStats'],
           preserveScroll: true,
            preserveState: true,
@@ -104,6 +105,19 @@ const showDetailsModal_Pending = ref(false)
 
 
 function closeDetailsModal_Pending() { showDetailsModal_Pending.value = false; selected.value = null }
+
+function handleTicketUpdated(data) {
+  router.reload({
+    only: ['myNewTickets', 'myInProgTickets', 'ticketStats'],
+    preserveScroll: true,
+    preserveState: true,
+    onFinish: () => {
+      if (data?.status === 'In Progress') {
+        emit('attended', { ticketId: data.id })
+      }
+    }
+  })
+}
 
 function onAttended() {
 
@@ -166,7 +180,7 @@ onBeforeUnmount(() => window.removeEventListener('tickets:attended', onAttended)
                 </button>
                 <button
                   type="button"
-                  title="Attend Ticket"
+                  title="Attend Ticket & Notify Client"
                   class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs shadow-2xs transition disabled:opacity-50"
                   :disabled="attendingId === t.ticket_id"
                   @click="attendTicketAction(t.ticket_id)"
@@ -210,6 +224,7 @@ onBeforeUnmount(() => window.removeEventListener('tickets:attended', onAttended)
       :ticket="selected"
       :from-my-ticket="true"
       @close="closeDetailsModal_Pending"
+      @updated="handleTicketUpdated"
     />
   </div>
 </template>

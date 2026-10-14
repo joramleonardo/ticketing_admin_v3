@@ -18,9 +18,15 @@ use Inertia\Inertia;
 
 class ClientController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        return Inertia::render('TicketsV2/ClientMain', []);
+        $hasTrackParam = $request->query('tab') === 'track' || $request->filled('track') || $request->filled('ref');
+
+        return Inertia::render('TicketsV2/ClientMain', [
+            'initialView' => $hasTrackParam ? 'track' : 'create',
+            'initialCode' => $request->query('track') ?? $request->query('ref'),
+            'autoOpen' => $request->boolean('open', false),
+        ]);
     }
 
     public function store(Request $request)
@@ -236,8 +242,15 @@ class ClientController extends Controller
         );
     }
 
-    public function track(string $employee_code)
+    public function track(Request $request, string $employee_code)
     {
+        if (! $request->wantsJson() || $request->header('X-Inertia')) {
+            return redirect()->route('client.main', [
+                'track' => $employee_code,
+                'open' => '1',
+            ]);
+        }
+
         $query = trim($employee_code);
 
         // 1) Direct reference number lookup
@@ -349,6 +362,7 @@ class ClientController extends Controller
                 'd.ticket_problem_that_needed_support',
                 'd.date_requested',
                 'c.client_name',
+                'c.client_email',
                 'c.client_empID',
                 'c.client_sex',
             ])->first();
@@ -377,6 +391,7 @@ class ClientController extends Controller
             'date_attended' => $attended ? Carbon::parse($attended)->toDateTimeString() : null,
             'date_completed' => $completed ? Carbon::parse($completed)->toDateTimeString() : null,
             'client_name' => $d->client_name,
+            'client_email' => $d->client_email ?? null,
             'client_empID' => $d->client_empID,
             'client_sex' => $d->client_sex,
         ]);

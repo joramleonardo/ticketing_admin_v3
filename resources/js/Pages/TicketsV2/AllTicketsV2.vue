@@ -28,7 +28,9 @@ const REQUEST_TYPE_OPTIONS = [
 
 // ── User Identity & Role ──────────────────────────────────────────────────────
 const page = usePage()
-const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
+const userRole = computed(() => String(page.props?.auth?.user?.role || '').trim().toLowerCase())
+const isAdmin = computed(() => ['admin', 'super admin'].includes(userRole.value))
+const isSuperAdmin = computed(() => userRole.value === 'super admin')
 
 const props = defineProps({
   tickets: Object, // ← paginator returned by controller
@@ -1272,8 +1274,9 @@ function submitBulkAssign() {
     ticket_type: bulkAssignType.value,
   }, {
     preserveScroll: true,
-    onSuccess: () => {
-      toast.success(`${selectedIds.value.length} tickets assigned to ${bulkAssignStaff.value}!`)
+    onSuccess: (page) => {
+      const flashMsg = page?.props?.flash?.success || `${selectedIds.value.length} tickets assigned to ${bulkAssignStaff.value}!`
+      toast.success(flashMsg)
       clearSelection()
       closeBulkAssignModal()
       fetchTickets(pagination.value.current_page ?? 1)
@@ -1417,8 +1420,9 @@ function submitQuickAssign() {
     ticket_type: type,
   }, {
     preserveScroll: true,
-    onSuccess: () => {
-      toast.success(`Ticket ${refNo} assigned to ${staff}!`)
+    onSuccess: (page) => {
+      const flashMsg = page?.props?.flash?.success || `Ticket ${refNo} assigned to ${staff}!`
+      toast.success(flashMsg)
       closeQuickAssign()
       fetchTickets(pagination.value.current_page ?? 1)
     },
@@ -1659,9 +1663,12 @@ const divisionDistribution = computed(() => {
     <div class="flex flex-col xl:flex-row gap-6 items-start w-full">
       <!-- Main Left Column: Tickets Table & Management Controls -->
       <div class="flex-1 min-w-0 w-full transition-all duration-300">
-        <div class="relative flex flex-col min-w-0 break-words bg-white w-full mb-6 shadow-md rounded-2xl border border-slate-200 overflow-hidden">
+        <div class="relative flex flex-col min-w-0 break-words bg-white w-full mb-6 shadow-md rounded-2xl border border-slate-200">
     <!-- ── Top Header Section ────────────────────────────────────────── -->
-    <div class="relative z-40 flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white">
+    <div
+      class="rounded-t-2xl flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white transition-all"
+      :class="(showCreateMenu || showDisplayMenu) ? 'relative z-40' : 'relative z-20'"
+    >
       <div>
         <h3 class="font-bold text-lg text-slate-900 tracking-tight">
           All Tickets
@@ -1692,7 +1699,7 @@ const divisionDistribution = computed(() => {
           <!-- Dropdown Menu -->
           <div
             v-if="showCreateMenu"
-            class="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-40 divide-y divide-slate-100"
+            class="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 divide-y divide-slate-100"
           >
             <div class="py-1">
               <button
@@ -1774,7 +1781,7 @@ const divisionDistribution = computed(() => {
           <!-- Dropdown Menu -->
           <div
             v-if="showDisplayMenu"
-            class="absolute right-0 z-30 mt-1.5 w-64 rounded-xl bg-white p-3 shadow-2xl border border-slate-200 text-xs text-left"
+            class="absolute right-0 z-50 mt-1.5 w-64 rounded-xl bg-white p-3 shadow-2xl border border-slate-200 text-xs text-left"
           >
             <!-- Density Segmented Option -->
             <div class="pb-3 border-b border-slate-100">
@@ -1852,7 +1859,10 @@ const divisionDistribution = computed(() => {
     </div>
 
     <!-- ── Option A: Segmented Status Control Bar & Workflow Presets ────── -->
-    <div class="bg-slate-50/70 border-b border-slate-200 px-6 py-2.5 relative z-30">
+    <div
+      class="bg-slate-50/70 border-b border-slate-200 px-6 py-2.5 transition-all"
+      :class="showPresetsMenu ? 'relative z-30' : 'relative z-10'"
+    >
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-0.5">
         <!-- Sleek Segmented Capsule Tabs (Linear / GitHub style) -->
         <div class="inline-flex items-center p-1 bg-slate-200/70 rounded-xl gap-0.5 overflow-x-auto shrink-0 select-none max-w-full">
@@ -1991,7 +2001,10 @@ const divisionDistribution = computed(() => {
 
     <div class="block w-full p-6">
       <!-- ── Option A: Unified 1-Row Filters Toolbar ─────────────────── -->
-      <div class="mb-5 bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-xs relative z-20">
+      <div
+        class="mb-5 bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-xs transition-all"
+        :class="showDateRangeMenu ? 'relative z-30' : 'relative z-10'"
+      >
         <div class="flex flex-col md:flex-row md:items-center gap-2.5">
           <!-- Search Input (expands to fill space) -->
           <div class="relative flex-1 min-w-[220px]">
@@ -2065,7 +2078,11 @@ const divisionDistribution = computed(() => {
           </div>
 
           <!-- Unified Date Range Popover Button -->
-          <div class="relative w-full md:w-48 shrink-0" v-click-outside="() => (showDateRangeMenu = false)">
+          <div
+            class="relative w-full md:w-48 shrink-0"
+            :class="{ 'z-40': showDateRangeMenu }"
+            v-click-outside="() => (showDateRangeMenu = false)"
+          >
             <button
               type="button"
               @click="showDateRangeMenu = !showDateRangeMenu"
@@ -2380,7 +2397,7 @@ const divisionDistribution = computed(() => {
       </div>
 
       <!-- ── Table Container ─────────────────────────────────────────── -->
-      <div class="relative z-10 rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm max-h-[calc(100vh-210px)] overflow-x-auto overflow-y-auto">
+      <div class="relative z-0 rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm max-h-[calc(100vh-210px)] overflow-x-auto overflow-y-auto">
         <table class="w-full text-left border-collapse">
           <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur shadow-xs">
             <tr class="bg-slate-50/95 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider select-none">
@@ -2741,6 +2758,18 @@ const divisionDistribution = computed(() => {
                     <span class="hidden md:inline">View</span>
                   </button>
 
+                  <!-- Direct Delete Button (Admin and Super Admin) -->
+                  <button
+                    v-if="isAdmin"
+                    type="button"
+                    @click.stop="openSingleDeleteModal(ticket)"
+                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                    title="Permanently delete ticket (Admin / Super Admin)"
+                  >
+                    <i class="fa-regular fa-trash-can text-rose-500 text-xs"></i>
+                    <span class="hidden md:inline">Delete</span>
+                  </button>
+
                   <!-- 2. More Actions ('···') Dropdown Menu (Strictly Non-Redundant & Non-Status) -->
                   <div
                     class="relative inline-block text-left"
@@ -2760,7 +2789,7 @@ const divisionDistribution = computed(() => {
                     <div
                       v-if="activeRowMenuId === getTicketKey(ticket)"
                       @click.stop
-                      class="absolute right-0 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-40 divide-y divide-slate-100"
+                      class="absolute right-0 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-20 divide-y divide-slate-100"
                       :class="isNearBottom(index) ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
                     >
                       <div class="py-1">
@@ -3404,6 +3433,7 @@ const divisionDistribution = computed(() => {
     @next="selectNextTicket"
     @close="closeDetailsModal"
     @updated="onTicketUpdated"
+    @delete="(t) => { closeDetailsModal(); openSingleDeleteModal(t) }"
   />
 
   <!-- ── MODAL - Bulk Assign Staff ────────────────────────────────────── -->
@@ -3495,6 +3525,12 @@ const divisionDistribution = computed(() => {
               <span class="truncate">{{ opt.label }}</span>
             </button>
           </div>
+        </div>
+
+        <!-- Staff Notification Info Banner -->
+        <div class="p-2.5 rounded-xl bg-blue-50/80 border border-blue-200/60 flex items-center gap-2.5 text-blue-900 text-xs">
+          <i class="fa-solid fa-envelope-circle-check text-blue-600 text-sm shrink-0"></i>
+          <span>The assigned IT specialist will be notified immediately via email with ticket details and workspace access.</span>
         </div>
       </div>
 
@@ -3662,6 +3698,12 @@ const divisionDistribution = computed(() => {
             </button>
           </div>
         </div>
+
+        <!-- Staff Notification Info Banner -->
+        <div class="p-2.5 rounded-xl bg-blue-50/80 border border-blue-200/60 flex items-center gap-2.5 text-blue-900 text-xs">
+          <i class="fa-solid fa-envelope-circle-check text-blue-600 text-sm shrink-0"></i>
+          <span>The assigned IT specialist will be notified immediately via email with ticket details and workspace access.</span>
+        </div>
       </div>
 
       <!-- Footer Buttons -->
@@ -3712,7 +3754,7 @@ const divisionDistribution = computed(() => {
           Are you sure you want to permanently delete <strong class="text-rose-700 font-bold">{{ selectedCount }} selected tickets</strong>?
         </p>
         <p class="text-slate-500 bg-rose-50 p-2.5 rounded-lg border border-rose-100">
-          This will delete the tickets, their technical details, and all activity audit logs. This action <span class="font-bold text-rose-700">cannot be undone</span>.
+          This will permanently delete the tickets and all associated records, including messages, attachments, technical details, and activity audit logs. This action <span class="font-bold text-rose-700">cannot be undone</span>.
         </p>
       </div>
 
@@ -3760,7 +3802,8 @@ const divisionDistribution = computed(() => {
           <strong class="font-mono text-rose-700 font-bold">Ticket {{ expectedDeleteRef }}</strong>
           <span v-if="ticketToDelete?.client_name">
             for <strong class="text-slate-900 font-bold">{{ ticketToDelete.client_name }}</strong>
-          </span>.
+          </span>,
+          along with all messages, attachments, technical details, and activity audit logs.
           This action <span class="font-bold text-rose-700">cannot be undone</span>.
         </p>
 

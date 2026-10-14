@@ -2,7 +2,7 @@
   <Teleport to="body">
     <div
       v-if="show"
-      class="fixed inset-0 z-50 overflow-hidden"
+      class="fixed inset-0 z-[70] overflow-hidden"
       role="dialog"
       aria-modal="true"
     >
@@ -14,7 +14,7 @@
 
       <!-- Slide-Over Drawer or Centered Modal Card -->
       <div
-        class="fixed z-50 flex flex-col bg-white overflow-hidden text-slate-800 shadow-2xl transform-gpu will-change-transform"
+        class="fixed z-[70] flex flex-col bg-white overflow-hidden text-slate-800 shadow-2xl transform-gpu will-change-transform"
         :class="viewMode === 'drawer'
           ? 'inset-y-0 right-0 w-full max-w-2xl xl:max-w-3xl h-full border-l border-slate-200'
           : 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-4xl max-h-[90vh] rounded-2xl border border-slate-200'"
@@ -39,10 +39,10 @@
                 </button>
                 <span class="text-slate-300 hidden sm:inline">·</span>
                 <span class="text-xs font-semibold text-slate-700 truncate max-w-[150px] sm:max-w-[220px]">
-                  {{ ticket?.client_name || 'N/A' }}
+                  {{ ticket?.client_name || ticketDetail.client_name || 'N/A' }}
                 </span>
                 <span class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                  {{ mapDivision(ticket?.client_division_agency) }}
+                  {{ mapDivision(ticket?.client_division_agency || ticketDetail.client_division_agency) }}
                 </span>
               </div>
             </div>
@@ -88,6 +88,18 @@
             >
               <i class="fa-solid fa-pen-to-square text-[11px]"></i>
               <span class="hidden sm:inline">{{ activeActionPanel === 'edit' ? 'Close' : 'Edit' }}</span>
+            </button>
+
+            <!-- Delete Button (Admin & Super Admin) -->
+            <button
+              v-if="isAdmin && ticket"
+              type="button"
+              @click="emit('delete', ticket)"
+              class="h-8 px-2.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+              title="Delete ticket (Admin / Super Admin)"
+            >
+              <i class="fa-regular fa-trash-can text-[11px] text-rose-600"></i>
+              <span class="hidden sm:inline">Delete</span>
             </button>
 
             <!-- View Mode Switcher -->
@@ -537,7 +549,7 @@
             </div>
 
             <!-- Additional resolution fields if Completed or Closed or actions logged -->
-            <template v-if="status === 'Completed' || status === 'Closed' || ticket.detail?.ticket_actions_taken">
+            <template v-if="status === 'Completed' || status === 'Closed' || ticketDetail.ticket_actions_taken">
               <div>
                 <label class="block text-xs font-semibold text-slate-700 mb-1">Nature of Support</label>
                 <select
@@ -618,18 +630,49 @@
                     Problem Description
                   </h4>
                   <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                    {{ ticket.detail?.ticket_type || 'Technical Support' }}
+                    {{ ticketDetail.ticket_type || 'Technical Support' }}
                   </span>
                 </div>
 
                 <div class="text-xs sm:text-sm text-slate-800 font-normal leading-relaxed whitespace-pre-wrap bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/60">
-                  {{ ticket.detail?.ticket_problem_that_needed_support || 'No description provided.' }}
+                  {{ ticketDetail.ticket_problem_that_needed_support || 'No description provided.' }}
+                </div>
+              </div>
+
+              <!-- Event Information Block (Visible when Events type or event details exist) -->
+              <div
+                v-if="(ticketDetail.ticket_type === 'Events' || ticket?.event || ticketDetail.event_start_date) && (ticket?.event?.event_start_date || ticketDetail.event_start_date || ticket?.event?.event_venue || ticketDetail.event_venue)"
+                class="p-4 sm:p-5 rounded-2xl bg-blue-50/40 border border-blue-200/80 shadow-2xs space-y-3"
+              >
+                <div class="flex items-center justify-between pb-2 border-b border-blue-200/60">
+                  <h4 class="text-xs font-bold uppercase tracking-wider text-blue-800 flex items-center gap-2">
+                    <i class="fa-solid fa-calendar-check text-blue-600 text-xs"></i>
+                    Event Information
+                  </h4>
+                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                    Event Details
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div v-if="ticket?.event?.event_start_date || ticketDetail.event_start_date">
+                    <span class="text-slate-400 block text-[11px]">Start Date:</span>
+                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticket?.event?.event_start_date || ticketDetail.event_start_date) }}</span>
+                  </div>
+                  <div v-if="ticket?.event?.event_end_date || ticketDetail.event_end_date">
+                    <span class="text-slate-400 block text-[11px]">End Date:</span>
+                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticket?.event?.event_end_date || ticketDetail.event_end_date) }}</span>
+                  </div>
+                  <div v-if="ticket?.event?.event_venue || ticketDetail.event_venue" class="sm:col-span-2">
+                    <span class="text-slate-400 block text-[11px]">Venue:</span>
+                    <span class="font-semibold text-slate-700">{{ ticket?.event?.event_venue || ticketDetail.event_venue }}</span>
+                  </div>
                 </div>
               </div>
 
               <!-- Resolution & Actions Taken (Visible when completed, closed, or actions logged) -->
               <div
-                v-if="status === 'Completed' || status === 'Closed' || ticket.detail?.ticket_actions_taken"
+                v-if="status === 'Completed' || status === 'Closed' || ticketDetail.ticket_actions_taken"
                 class="p-4 sm:p-5 rounded-2xl bg-emerald-50/40 border border-emerald-200/90 shadow-2xs space-y-3"
               >
                 <div class="flex items-center justify-between pb-2 border-b border-emerald-200/60">
@@ -643,23 +686,23 @@
                 </div>
 
                 <div class="text-xs sm:text-sm text-slate-800 bg-white p-3.5 rounded-xl border border-emerald-200/80 whitespace-pre-wrap leading-relaxed shadow-2xs">
-                  {{ ticket.detail?.ticket_actions_taken || 'Resolution logged upon ticket completion.' }}
+                  {{ ticketDetail.ticket_actions_taken || 'Resolution logged upon ticket completion.' }}
                 </div>
 
-                <div v-if="ticket.detail?.ticket_nature_of_support || ticket.detail?.ticket_support_type" class="grid grid-cols-2 gap-2 text-xs pt-1">
-                  <div v-if="ticket.detail?.ticket_nature_of_support">
+                <div v-if="ticketDetail.ticket_nature_of_support || ticketDetail.ticket_support_type" class="grid grid-cols-2 gap-2 text-xs pt-1">
+                  <div v-if="ticketDetail.ticket_nature_of_support">
                     <span class="text-slate-400 block text-[11px]">Nature of Support:</span>
-                    <span class="font-semibold text-slate-700">{{ ticket.detail.ticket_nature_of_support }}</span>
+                    <span class="font-semibold text-slate-700">{{ ticketDetail.ticket_nature_of_support }}</span>
                   </div>
-                  <div v-if="ticket.detail?.ticket_support_type">
+                  <div v-if="ticketDetail.ticket_support_type">
                     <span class="text-slate-400 block text-[11px]">Support Sub-Type:</span>
-                    <span class="font-semibold text-slate-700">{{ ticket.detail.ticket_support_type }}</span>
+                    <span class="font-semibold text-slate-700">{{ ticketDetail.ticket_support_type }}</span>
                   </div>
                 </div>
 
-                <div v-if="ticket.detail?.ticket_remarks" class="pt-2 border-t border-emerald-200/60 text-xs">
+                <div v-if="ticketDetail.ticket_remarks" class="pt-2 border-t border-emerald-200/60 text-xs">
                   <span class="text-slate-400 block text-[11px]">Remarks:</span>
-                  <span class="font-medium text-slate-700">{{ ticket.detail.ticket_remarks }}</span>
+                  <span class="font-medium text-slate-700">{{ ticketDetail.ticket_remarks }}</span>
                 </div>
               </div>
             </div>
@@ -700,44 +743,44 @@
                     <span class="text-slate-500 font-medium">Assigned To</span>
                     <span class="font-semibold text-slate-800 inline-flex items-center gap-1.5">
                       <i class="fa-solid fa-user text-[11px] text-blue-600"></i>
-                      {{ ticket.detail?.ticket_assigned_staff || ticket.detail?.ticket_attended_by || 'Unassigned' }}
+                      {{ ticketDetail.ticket_assigned_staff || ticketDetail.ticket_attended_by || 'Unassigned' }}
                     </span>
                   </div>
 
                   <!-- Client Name -->
                   <div class="flex items-center justify-between">
                     <span class="text-slate-500 font-medium">Client</span>
-                    <span class="font-semibold text-slate-800 text-right truncate max-w-[160px]">{{ ticket.client_name || 'N/A' }}</span>
+                    <span class="font-semibold text-slate-800 text-right truncate max-w-[160px]">{{ ticket?.client_name || ticketDetail.client_name || 'N/A' }}</span>
                   </div>
 
                   <!-- Division -->
                   <div class="flex items-center justify-between">
                     <span class="text-slate-500 font-medium">Division / Agency</span>
-                    <span class="font-semibold text-slate-800">{{ mapDivision(ticket.client_division_agency) }}</span>
+                    <span class="font-semibold text-slate-800">{{ mapDivision(ticket?.client_division_agency || ticketDetail.client_division_agency) }}</span>
                   </div>
 
                   <!-- Client Type -->
-                  <div v-if="ticket.client_type" class="flex items-center justify-between">
+                  <div v-if="ticket?.client_type || ticketDetail.client_type" class="flex items-center justify-between">
                     <span class="text-slate-500 font-medium">Client Type</span>
-                    <span class="font-medium text-slate-700">{{ ticket.client_type }}</span>
+                    <span class="font-medium text-slate-700">{{ ticket?.client_type || ticketDetail.client_type }}</span>
                   </div>
 
                   <!-- Timestamps Section -->
                   <div class="pt-2.5 border-t border-slate-200/80 space-y-2 text-[11px]">
                     <div class="flex items-center justify-between text-slate-500">
                       <span>Requested:</span>
-                      <span class="font-medium text-slate-700">{{ formatDateTime(ticket.created_at) }}</span>
+                      <span class="font-medium text-slate-700">{{ formatDateTime(ticket?.date_requested || ticketDetail.date_requested || ticket?.created_at || ticketDetail.created_at) }}</span>
                     </div>
-                    <div v-if="ticket.detail?.ticket_attended_at || ticket.detail?.ticket_attended_by" class="flex items-center justify-between text-slate-500">
+                    <div v-if="ticketDetail.ticket_attended_at || ticketDetail.ticket_attended_by" class="flex items-center justify-between text-slate-500">
                       <span>Attended:</span>
                       <span class="font-medium text-slate-700">
-                        {{ ticket.detail?.ticket_attended_by || 'Staff' }}
-                        <span v-if="ticket.detail?.ticket_attended_at">({{ formatDateTime(ticket.detail.ticket_attended_at) }})</span>
+                        {{ ticketDetail.ticket_attended_by || 'Staff' }}
+                        <span v-if="ticketDetail.ticket_attended_at">({{ formatDateTime(ticketDetail.ticket_attended_at) }})</span>
                       </span>
                     </div>
-                    <div v-if="ticket.detail?.date_completed" class="flex items-center justify-between text-slate-500">
+                    <div v-if="ticketDetail.date_completed" class="flex items-center justify-between text-slate-500">
                       <span>Completed:</span>
-                      <span class="font-medium text-slate-700">{{ formatDateTime(ticket.detail.date_completed) }}</span>
+                      <span class="font-medium text-slate-700">{{ formatDateTime(ticketDetail.date_completed) }}</span>
                     </div>
                   </div>
                 </div>
@@ -747,7 +790,62 @@
         </div>
 
         <!-- ── TAB 2: MESSAGES & CHAT (Zero Nested Scroll Conflict) ──────── -->
-        <div v-show="activeTab === 'messages'" class="pt-1">
+        <div v-show="activeTab === 'messages'" class="pt-1 space-y-3">
+          <!-- Client Email Notification Banner / Indicator -->
+          <div
+            v-if="clientEmail"
+            class="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border border-blue-200/80 bg-blue-50/70 text-xs shadow-2xs"
+          >
+            <div class="flex items-center gap-2.5 text-blue-900 min-w-0">
+              <span class="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                <i class="fa-solid fa-envelope text-xs"></i>
+              </span>
+              <div class="truncate">
+                <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                  <span>Client Email Notifications Active</span>
+                  <span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-blue-200/80 text-blue-900">
+                    Auto-alert
+                  </span>
+                </div>
+                <p class="text-slate-600 text-[11px] truncate mt-0.5">
+                  Messages you send here will be emailed directly to
+                  <span class="font-semibold text-blue-700 underline">{{ clientEmail }}</span>
+                  with a direct link to reply.
+                </p>
+              </div>
+            </div>
+            <span class="hidden md:inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 shrink-0">
+              <i class="fa-solid fa-circle-check text-blue-600 text-[10px]"></i>
+              <span>Deliverable</span>
+            </span>
+          </div>
+
+          <div
+            v-else
+            class="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border border-amber-200/80 bg-amber-50/70 text-xs shadow-2xs"
+          >
+            <div class="flex items-center gap-2.5 text-amber-900 min-w-0">
+              <span class="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                <i class="fa-solid fa-triangle-exclamation text-xs"></i>
+              </span>
+              <div class="truncate">
+                <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                  <span>No Client Email Registered</span>
+                  <span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-200/80 text-amber-900">
+                    Web-only
+                  </span>
+                </div>
+                <p class="text-slate-600 text-[11px] truncate mt-0.5">
+                  The client did not provide an email. Messages are only visible when they visit their online tracking link.
+                </p>
+              </div>
+            </div>
+            <span class="hidden md:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 shrink-0">
+              <i class="fa-solid fa-circle-info text-amber-600 text-[10px]"></i>
+              <span>Tracking Portal Only</span>
+            </span>
+          </div>
+
           <TicketMessageThread
             v-if="ticket?.client_referenceNo"
             :client-reference-no="ticket.client_referenceNo"
@@ -955,7 +1053,7 @@ const props = defineProps({
   initialAction: { type: String, default: null }, // 'edit' | 'assign' | 'complete' | 'close' | null
 })
 
-const emit = defineEmits(['close', 'updated', 'prev', 'next'])
+const emit = defineEmits(['close', 'updated', 'prev', 'next', 'delete'])
 
 // ── Tab Navigation State ──────────────────────────────────────────────────────
 const activeTab = ref(props.initialTab || 'overview')
@@ -1018,7 +1116,8 @@ onBeforeUnmount(() => {
 })
 
 // ── Roles & Identity ──────────────────────────────────────────────────────────
-const isAdmin = computed(() => ['Admin', 'Super Admin'].includes(page.props?.auth?.user?.role))
+const userRole = computed(() => String(page.props?.auth?.user?.role || '').trim().toLowerCase())
+const isAdmin = computed(() => ['admin', 'super admin'].includes(userRole.value))
 const currentUserName = computed(() => page.props?.auth?.user?.name || page.props?.auth?.user?.username || 'Staff')
 
 // ── Reactive Local Ticket (For Immediate UI Updates After Edits/Actions) ───────
@@ -1028,7 +1127,19 @@ watch(
   () => props.ticket,
   (newTicket) => {
     if (newTicket) {
-      localTicket.value = JSON.parse(JSON.stringify(newTicket))
+      const cloned = JSON.parse(JSON.stringify(newTicket))
+      // Ensure cloned.detail exists even if caller passed a flat object
+      if (!cloned.detail) {
+        cloned.detail = { ...cloned }
+      }
+      if (!cloned.event && cloned.event_start_date) {
+        cloned.event = {
+          event_start_date: cloned.event_start_date,
+          event_end_date: cloned.event_end_date,
+          event_venue: cloned.event_venue,
+        }
+      }
+      localTicket.value = cloned
       if (activeActionPanel.value) {
         initPanelData(activeActionPanel.value)
       }
@@ -1040,6 +1151,8 @@ watch(
 )
 
 const ticket = computed(() => localTicket.value || props.ticket)
+const ticketDetail = computed(() => ticket.value?.detail || ticket.value || {})
+const ticketEvent = computed(() => ticket.value?.event || ticket.value || {})
 
 // ── Core Computed Properties ──────────────────────────────────────────────────
 const ticketId = computed(() => {
@@ -1052,6 +1165,15 @@ const ticketRef = computed(() => {
 
 const status = computed(() => {
   return (ticket.value?.detail?.ticket_status ?? ticket.value?.ticket_status ?? 'New').trim()
+})
+
+const clientEmail = computed(() => {
+  return (
+    ticket.value?.client_email ||
+    ticket.value?.detail?.client_email ||
+    ticketDetail.value?.client_email ||
+    ''
+  ).trim()
 })
 
 // ── Sub-Category & Related Options (Centralized) ──────────────────────────────
@@ -1120,34 +1242,35 @@ const editForm = reactive({
 })
 
 function initPanelData(panel) {
-  const t = ticket.value
+  const d = ticketDetail.value
+  const ev = ticketEvent.value
   if (panel === 'assign') {
-    assignForm.staff = t?.detail?.ticket_assigned_staff || ''
-    assignForm.type = t?.detail?.ticket_type || 'Technical Support'
-    assignForm.eventStartDate = t?.event?.event_start_date || ''
-    assignForm.eventEndDate = t?.event?.event_end_date || ''
-    assignForm.eventVenue = t?.event?.event_venue || ''
+    assignForm.staff = d?.ticket_assigned_staff || d?.ticket_attended_by || ''
+    assignForm.type = d?.ticket_type || 'Technical Support'
+    assignForm.eventStartDate = ev?.event_start_date || ''
+    assignForm.eventEndDate = ev?.event_end_date || ''
+    assignForm.eventVenue = ev?.event_venue || ''
   } else if (panel === 'complete') {
-    completeForm.supportType = t?.detail?.ticket_type || 'Technical Support'
-    completeForm.nature = t?.detail?.ticket_nature_of_support || 'Hardware'
-    completeForm.subCategory = t?.detail?.ticket_support_type || 'Troubleshoot'
-    completeForm.relatedType = t?.detail?.ticket_related_type || ''
-    completeForm.actionTaken = t?.detail?.ticket_actions_taken || ''
-    completeForm.remarksOption = t?.detail?.ticket_remarks || 'N/A'
+    completeForm.supportType = d?.ticket_type || 'Technical Support'
+    completeForm.nature = d?.ticket_nature_of_support || 'Hardware'
+    completeForm.subCategory = d?.ticket_support_type || 'Troubleshoot'
+    completeForm.relatedType = d?.ticket_related_type || ''
+    completeForm.actionTaken = d?.ticket_actions_taken || ''
+    completeForm.remarksOption = d?.ticket_remarks || 'N/A'
     completeForm.customRemarks = ''
   } else if (panel === 'close') {
     closeForm.remarks = ''
   } else if (panel === 'edit') {
-    editForm.type = t?.detail?.ticket_type || 'Technical Support'
-    editForm.staff = t?.detail?.ticket_assigned_staff || t?.detail?.ticket_attended_by || ''
-    editForm.problem = t?.detail?.ticket_problem_that_needed_support || ''
-    editForm.nature = t?.detail?.ticket_nature_of_support || ''
-    editForm.subCategory = t?.detail?.ticket_support_type || ''
-    editForm.actionTaken = t?.detail?.ticket_actions_taken || ''
-    editForm.remarks = t?.detail?.ticket_remarks || ''
-    editForm.eventStartDate = t?.event?.event_start_date || ''
-    editForm.eventEndDate = t?.event?.event_end_date || ''
-    editForm.eventVenue = t?.event?.event_venue || ''
+    editForm.type = d?.ticket_type || 'Technical Support'
+    editForm.staff = d?.ticket_assigned_staff || d?.ticket_attended_by || ''
+    editForm.problem = d?.ticket_problem_that_needed_support || ''
+    editForm.nature = d?.ticket_nature_of_support || ''
+    editForm.subCategory = d?.ticket_support_type || ''
+    editForm.actionTaken = d?.ticket_actions_taken || ''
+    editForm.remarks = d?.ticket_remarks || ''
+    editForm.eventStartDate = ev?.event_start_date || ''
+    editForm.eventEndDate = ev?.event_end_date || ''
+    editForm.eventVenue = ev?.event_venue || ''
   }
 }
 
@@ -1219,8 +1342,9 @@ async function attendTicket() {
     ticket_status: 'In Progress',
   }, {
     preserveScroll: true,
-    onSuccess: () => {
-      toast.success('Ticket attended and now In Progress!')
+    onSuccess: (page) => {
+      const flashMsg = page?.props?.flash?.success || 'Ticket attended and now In Progress!'
+      toast.success(flashMsg)
       if (localTicket.value) {
         if (!localTicket.value.detail) localTicket.value.detail = {}
         localTicket.value.detail.ticket_status = 'In Progress'
@@ -1385,38 +1509,67 @@ async function submitEdit() {
           localTicket.value.detail = {}
         }
         localTicket.value.detail.ticket_type = editForm.type
+        localTicket.value.ticket_type = editForm.type
         localTicket.value.detail.ticket_assigned_staff = editForm.staff || null
+        localTicket.value.ticket_assigned_staff = editForm.staff || null
         localTicket.value.detail.ticket_problem_that_needed_support = editForm.problem
+        localTicket.value.ticket_problem_that_needed_support = editForm.problem
         if (payload.ticket_nature_of_support !== undefined) {
           localTicket.value.detail.ticket_nature_of_support = payload.ticket_nature_of_support
+          localTicket.value.ticket_nature_of_support = payload.ticket_nature_of_support
         }
         if (payload.ticket_support_type !== undefined) {
           localTicket.value.detail.ticket_support_type = payload.ticket_support_type
+          localTicket.value.ticket_support_type = payload.ticket_support_type
         }
         if (payload.ticket_actions_taken !== undefined) {
           localTicket.value.detail.ticket_actions_taken = payload.ticket_actions_taken
+          localTicket.value.ticket_actions_taken = payload.ticket_actions_taken
         }
         if (payload.ticket_remarks !== undefined) {
           localTicket.value.detail.ticket_remarks = payload.ticket_remarks
+          localTicket.value.ticket_remarks = payload.ticket_remarks
+        }
+        if (editForm.type === 'Events') {
+          if (!localTicket.value.event) localTicket.value.event = {}
+          localTicket.value.event.event_start_date = editForm.eventStartDate
+          localTicket.value.event.event_end_date = editForm.eventEndDate
+          localTicket.value.event.event_venue = editForm.eventVenue
         }
       }
 
-      // Also update props.ticket.detail in place so parent references stay synchronized
-      if (props.ticket && props.ticket.detail) {
+      // Also update props.ticket in place so parent references stay synchronized
+      if (props.ticket) {
+        if (!props.ticket.detail) {
+          props.ticket.detail = {}
+        }
         props.ticket.detail.ticket_type = editForm.type
+        props.ticket.ticket_type = editForm.type
         props.ticket.detail.ticket_assigned_staff = editForm.staff || null
+        props.ticket.ticket_assigned_staff = editForm.staff || null
         props.ticket.detail.ticket_problem_that_needed_support = editForm.problem
+        props.ticket.ticket_problem_that_needed_support = editForm.problem
         if (payload.ticket_nature_of_support !== undefined) {
           props.ticket.detail.ticket_nature_of_support = payload.ticket_nature_of_support
+          props.ticket.ticket_nature_of_support = payload.ticket_nature_of_support
         }
         if (payload.ticket_support_type !== undefined) {
           props.ticket.detail.ticket_support_type = payload.ticket_support_type
+          props.ticket.ticket_support_type = payload.ticket_support_type
         }
         if (payload.ticket_actions_taken !== undefined) {
           props.ticket.detail.ticket_actions_taken = payload.ticket_actions_taken
+          props.ticket.ticket_actions_taken = payload.ticket_actions_taken
         }
         if (payload.ticket_remarks !== undefined) {
           props.ticket.detail.ticket_remarks = payload.ticket_remarks
+          props.ticket.ticket_remarks = payload.ticket_remarks
+        }
+        if (editForm.type === 'Events') {
+          if (!props.ticket.event) props.ticket.event = {}
+          props.ticket.event.event_start_date = editForm.eventStartDate
+          props.ticket.event.event_end_date = editForm.eventEndDate
+          props.ticket.event.event_venue = editForm.eventVenue
         }
       }
 

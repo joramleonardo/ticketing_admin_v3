@@ -12,6 +12,7 @@ const props = defineProps({
   summary: { type: Object, default: () => ({}) },
   filters: { type: Object, default: () => ({}) },
   currentUserId: { type: Number, default: null },
+  staffOptions: { type: Array, default: () => [] },
 })
 
 // ── Search & Filter State ─────────────────────────────────────────────────────
@@ -41,8 +42,14 @@ function resetFilters() {
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showDeleteModal = ref(false)
+const showDeactivateModal = ref(false)
 const userToDelete = ref(null)
+const userToDeactivate = ref(null)
 const editingUser = ref(null)
+
+const availableStaffOptions = computed(() => {
+  return props.staffOptions || []
+})
 
 // ── Create User Form ──────────────────────────────────────────────────────────
 const createForm = useForm({
@@ -87,6 +94,8 @@ const editForm = useForm({
   password_confirmation: '',
   role: 'Staff',
   isActivated: '1',
+  reassign_action: 'reassign',
+  reassign_to: '',
 })
 
 function openEditModal(user) {
@@ -101,6 +110,9 @@ function openEditModal(user) {
   editForm.isActivated = user.isActivated ? '1' : '0'
   editForm.password = ''
   editForm.password_confirmation = ''
+  editForm.reassign_action = 'reassign'
+  const otherStaff = availableStaffOptions.value.filter(s => s !== user.name)
+  editForm.reassign_to = otherStaff.length ? otherStaff[0] : ''
   showEditModal.value = true
 }
 
@@ -118,13 +130,31 @@ function submitEdit() {
   })
 }
 
-// ── Quick Toggle Status ───────────────────────────────────────────────────────
+// ── Quick Toggle Status & Workload Reassignment ───────────────────────────────
+const deactivationForm = useForm({
+  reassign_action: 'reassign',
+  reassign_to: '',
+})
+
 function toggleUserStatus(user) {
   if (user.id === props.currentUserId) {
     toast.error('You cannot deactivate your own account.')
     return
   }
 
+  // If user is currently active and has open tickets, prompt for workload reassignment!
+  if (user.isActivated && (user.open_tickets_count || 0) > 0) {
+    userToDeactivate.value = user
+    deactivationForm.reset()
+    deactivationForm.clearErrors()
+    deactivationForm.reassign_action = 'reassign'
+    const otherStaff = availableStaffOptions.value.filter(s => s !== user.name)
+    deactivationForm.reassign_to = otherStaff.length ? otherStaff[0] : ''
+    showDeactivateModal.value = true
+    return
+  }
+
+  // Otherwise direct toggle
   router.patch(route('admin.users.toggle-status', user.id), {}, {
     preserveScroll: true,
     onSuccess: () => {
@@ -136,19 +166,45 @@ function toggleUserStatus(user) {
   })
 }
 
-// ── Delete User ───────────────────────────────────────────────────────────────
+function executeDeactivation() {
+  if (!userToDeactivate.value) return
+
+  deactivationForm.patch(route('admin.users.toggle-status', userToDeactivate.value.id), {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`User '${userToDeactivate.value.name}' has been deactivated and workload handled.`)
+      showDeactivateModal.value = false
+      userToDeactivate.value = null
+    },
+    onError: (err) => {
+      toast.error(err?.reassign_to || err?.error || 'Failed to deactivate user.')
+    },
+  })
+}
+
+// ── Delete User Form & Execution ─────────────────────────────────────────────
+const deleteForm = useForm({
+  reassign_action: 'reassign',
+  reassign_to: '',
+})
+
 function confirmDelete(user) {
   if (user.id === props.currentUserId) {
     toast.error('You cannot delete your own account.')
     return
   }
   userToDelete.value = user
+  deleteForm.reset()
+  deleteForm.clearErrors()
+  deleteForm.reassign_action = (user.open_tickets_count || 0) > 0 ? 'reassign' : 'keep'
+  const otherStaff = availableStaffOptions.value.filter(s => s !== user.name)
+  deleteForm.reassign_to = otherStaff.length ? otherStaff[0] : ''
   showDeleteModal.value = true
 }
 
 function executeDelete() {
   if (!userToDelete.value) return
-  router.delete(route('admin.users.destroy', userToDelete.value.id), {
+  deleteForm.delete(route('admin.users.destroy', userToDelete.value.id), {
     preserveScroll: true,
     onSuccess: () => {
       toast.success(`User '${userToDelete.value.name}' deleted.`)
@@ -156,7 +212,7 @@ function executeDelete() {
       userToDelete.value = null
     },
     onError: (err) => {
-      toast.error(err?.error || 'Failed to delete user.')
+      toast.error(err?.reassign_to || err?.error || 'Failed to delete user.')
     },
   })
 }
@@ -867,6 +923,70 @@ function formatDate(val) {
             </label>
           </div>
 
+          <!-- Workload Reassignment if deactivating with open tickets -->
+          <div
+            v-if="editingUser?.isActivated && editForm.isActivated === '0' && (editingUser?.open_tickets_count || 0) > 0"
+            class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2.5"
+          >
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-triangle-exclamation text-amber-600 text-xs"></i>
+              <span class="text-xs font-bold text-amber-900">
+                Active Workload Alert: {{ editingUser.open_tickets_count }} Open Tickets
+              </span>
+            </div>
+            <p class="text-[11px] text-amber-800 leading-relaxed">
+              This user currently holds active tickets. Choose what action to perform on their open tickets upon deactivation:
+            </p>
+
+            <div class="space-y-1.5 pt-1">
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="editForm.reassign_action"
+                  value="reassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Reassign to active colleague:</span>
+              </label>
+              <div v-if="editForm.reassign_action === 'reassign'" class="pl-5 pt-0.5">
+                <select
+                  v-model="editForm.reassign_to"
+                  class="w-full h-8 px-2.5 rounded-lg border border-amber-300 text-xs bg-white text-slate-800 font-medium focus:ring-amber-500 focus:border-amber-500"
+                  required
+                >
+                  <option value="" disabled>Select colleague...</option>
+                  <option
+                    v-for="staffName in availableStaffOptions.filter(s => s !== editForm.name)"
+                    :key="staffName"
+                    :value="staffName"
+                  >
+                    {{ staffName }}
+                  </option>
+                </select>
+              </div>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="editForm.reassign_action"
+                  value="unassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Move to Triage Queue (Unassigned so Admins can re-dispatch)</span>
+              </label>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="editForm.reassign_action"
+                  value="keep"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-normal text-slate-600">Keep assigned to this inactive account (not recommended)</span>
+              </label>
+            </div>
+          </div>
+
           <!-- Footer Buttons -->
           <div class="flex items-center justify-end gap-2.5 pt-3.5 border-t border-slate-100">
             <button
@@ -878,7 +998,7 @@ function formatDate(val) {
             </button>
             <button
               type="submit"
-              :disabled="editForm.processing"
+              :disabled="editForm.processing || (editForm.isActivated === '0' && (editingUser?.open_tickets_count || 0) > 0 && editForm.reassign_action === 'reassign' && !editForm.reassign_to)"
               class="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase rounded-xl shadow-sm text-white bg-purple-900 hover:bg-purple-800 disabled:opacity-50 transition cursor-pointer"
             >
               <i v-if="editForm.processing" class="fa-solid fa-spinner animate-spin text-xs"></i>
@@ -887,6 +1007,113 @@ function formatDate(val) {
             </button>
           </div>
         </form>
+      </div>
+    </Modal>
+
+    <!-- ── WORKLOAD REASSIGNMENT ON DEACTIVATION MODAL ───────────────────────── -->
+    <Modal :show="showDeactivateModal" @close="showDeactivateModal = false" maxWidth="md">
+      <div class="p-6 bg-white rounded-2xl">
+        <div class="flex items-center justify-between pb-3.5 border-b border-amber-100">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm shadow-xs">
+              <i class="fa-solid fa-user-slash"></i>
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-slate-900">Deactivate Account</h3>
+              <p class="text-xs text-amber-600 font-semibold">Active Workload Reassignment</p>
+            </div>
+          </div>
+          <button type="button" @click="showDeactivateModal = false" class="text-slate-400 hover:text-slate-600 cursor-pointer">
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+
+        <div class="space-y-3.5 py-4 text-xs text-slate-700">
+          <p>
+            You are deactivating
+            <strong class="font-bold text-slate-900">{{ userToDeactivate?.name }}</strong> (@{{ userToDeactivate?.username }}).
+          </p>
+
+          <div class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-briefcase text-amber-600 text-xs"></i>
+              <span class="text-xs font-bold text-amber-900">
+                {{ userToDeactivate?.open_tickets_count }} Open Tickets Detected
+              </span>
+            </div>
+            <p class="text-[11px] text-amber-800 leading-relaxed">
+              Deactivating this user prevents them from logging in. How would you like to handle their currently active tickets?
+            </p>
+
+            <div class="space-y-2 pt-1">
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deactivationForm.reassign_action"
+                  value="reassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Reassign to another staff member</span>
+              </label>
+              <div v-if="deactivationForm.reassign_action === 'reassign'" class="pl-5 pt-0.5">
+                <select
+                  v-model="deactivationForm.reassign_to"
+                  class="w-full h-8 px-2.5 rounded-lg border border-amber-300 text-xs bg-white text-slate-800 font-medium focus:ring-amber-500 focus:border-amber-500"
+                  required
+                >
+                  <option value="" disabled>Select colleague...</option>
+                  <option
+                    v-for="staffName in availableStaffOptions.filter(s => s !== userToDeactivate?.name)"
+                    :key="staffName"
+                    :value="staffName"
+                  >
+                    {{ staffName }}
+                  </option>
+                </select>
+              </div>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deactivationForm.reassign_action"
+                  value="unassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Move to Triage Queue (Unassign)</span>
+              </label>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deactivationForm.reassign_action"
+                  value="keep"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-normal text-slate-600">Keep tickets assigned (not recommended)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2.5 pt-3.5 border-t border-slate-100">
+          <button
+            type="button"
+            @click="showDeactivateModal = false"
+            class="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            @click="executeDeactivation"
+            :disabled="deactivationForm.processing || (deactivationForm.reassign_action === 'reassign' && !deactivationForm.reassign_to)"
+            class="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase rounded-xl shadow-sm text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 transition cursor-pointer"
+          >
+            <i v-if="deactivationForm.processing" class="fa-solid fa-spinner animate-spin text-xs"></i>
+            <i v-else class="fa-solid fa-user-slash text-xs"></i>
+            <span>Confirm Deactivation</span>
+          </button>
+        </div>
       </div>
     </Modal>
 
@@ -913,6 +1140,71 @@ function formatDate(val) {
             Are you sure you want to permanently delete account for
             <strong class="font-bold text-slate-900">{{ userToDelete?.name }}</strong> (@{{ userToDelete?.username }})?
           </p>
+
+          <!-- Workload Handling in Delete Modal -->
+          <div
+            v-if="(userToDelete?.open_tickets_count || 0) > 0"
+            class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2.5"
+          >
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-triangle-exclamation text-amber-600 text-xs"></i>
+              <span class="text-xs font-bold text-amber-900">
+                Action Required: User has {{ userToDelete.open_tickets_count }} Open Tickets
+              </span>
+            </div>
+            <p class="text-[11px] text-amber-800 leading-relaxed">
+              Choose how to reassign active requests before permanently removing this account:
+            </p>
+
+            <div class="space-y-1.5 pt-1">
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deleteForm.reassign_action"
+                  value="reassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Reassign to active colleague:</span>
+              </label>
+              <div v-if="deleteForm.reassign_action === 'reassign'" class="pl-5 pt-0.5">
+                <select
+                  v-model="deleteForm.reassign_to"
+                  class="w-full h-8 px-2.5 rounded-lg border border-amber-300 text-xs bg-white text-slate-800 font-medium focus:ring-amber-500 focus:border-amber-500"
+                  required
+                >
+                  <option value="" disabled>Select colleague...</option>
+                  <option
+                    v-for="staffName in availableStaffOptions.filter(s => s !== userToDelete?.name)"
+                    :key="staffName"
+                    :value="staffName"
+                  >
+                    {{ staffName }}
+                  </option>
+                </select>
+              </div>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deleteForm.reassign_action"
+                  value="unassign"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-bold text-slate-800">Move to Triage Queue (Unassign)</span>
+              </label>
+
+              <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                <input
+                  type="radio"
+                  v-model="deleteForm.reassign_action"
+                  value="keep"
+                  class="text-amber-600 focus:ring-amber-500"
+                />
+                <span class="font-normal text-slate-600">Leave historical assignments unchanged</span>
+              </label>
+            </div>
+          </div>
+
           <p class="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-800 text-[11px] leading-relaxed">
             This account will lose all access to the ticketing system immediately. Historical tickets and activity logs assigned to this user will remain for audit purposes.
           </p>
@@ -929,9 +1221,11 @@ function formatDate(val) {
           <button
             type="button"
             @click="executeDelete"
-            class="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase rounded-xl shadow-sm text-white bg-rose-700 hover:bg-rose-800 transition cursor-pointer"
+            :disabled="deleteForm.processing || (deleteForm.reassign_action === 'reassign' && (userToDelete?.open_tickets_count || 0) > 0 && !deleteForm.reassign_to)"
+            class="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase rounded-xl shadow-sm text-white bg-rose-700 hover:bg-rose-800 disabled:opacity-50 transition cursor-pointer"
           >
-            <i class="fa-solid fa-trash-can text-xs"></i>
+            <i v-if="deleteForm.processing" class="fa-solid fa-spinner animate-spin text-xs"></i>
+            <i v-else class="fa-solid fa-trash-can text-xs"></i>
             <span>Confirm Delete</span>
           </button>
         </div>

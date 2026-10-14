@@ -3,14 +3,26 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TicketStatus;
+use App\Mail\StaffMessageNotificationMail;
+use App\Mail\TicketAssignedStaffNotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
+use App\Models\TicketAttachmentDetail;
 use App\Models\TicketClientDetail;
 use App\Models\TicketDetail;
 use App\Models\TicketEmployee;
+use App\Models\TicketEvent;
+use App\Models\TicketMessage;
+use App\Models\TicketRatingDetail;
+use App\Models\User;
+use App\Services\StaffService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
 class TicketV2Controller extends Controller
@@ -300,98 +312,188 @@ class TicketV2Controller extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'client_name' => 'required|string',
+            'client_name' => 'required|string|max:255',
             'client_type' => 'required|in:Internal,External',
-            'client_division_agency' => 'required|string',
-            'client_empID' => 'nullable|string',
-            'client_sex' => 'required|in:Female,Male,Prefer not to say',
+            'client_division_agency' => 'nullable|string|max:255',
+            'client_empID' => 'nullable|string|max:255',
+            'client_sex' => 'nullable|in:Female,Male,Prefer not to say',
 
             // Ticket Details
-            'ticket_type' => 'required|in:Technical Support,Livestream',
-            'ticket_nature_of_support' => 'required|in:Hardware,Software,Hardware & Software,System Modification,Others',
-            'ticket_support_type' => 'nullable|string',
-            'ticket_attended_by' => 'nullable|string',
-            'ticket_assisted_by' => 'nullable|string',
+            'ticket_type' => 'required|in:Technical Support,Livestream,Events',
+            'ticket_nature_of_support' => 'required|in:Hardware,Software,Hardware & Software,System Modification,Events,Livestream,Others',
+            'ticket_support_type' => 'nullable|string|max:255',
+            'ticket_attended_by' => 'nullable|string|max:255',
+            'ticket_assisted_by' => 'nullable',
             'ticket_problem_that_needed_support' => 'nullable|string',
             'ticket_actions_taken' => 'nullable|string',
             'ticket_remarks' => 'nullable|string',
 
             // Dates
             'date_requested' => 'required|date',
-            'date_completed' => 'nullable|date',
+            'date_completed' => 'nullable|date|after_or_equal:date_requested',
+        ], [
+            'date_completed.after_or_equal' => 'The completion date cannot be earlier than the request date.',
         ]);
 
-        // Extract these early and store in variables
+        $actorName = Auth::user()?->name ?? 'System';
         $clientName = $request->input('client_name');
-        $attendedBy = $request->input('ticket_attended_by');
-        $dateRequested = $request->input('date_requested');
-        $dateCompleted = $request->input('date_completed');
+        $attendedBy = $request->input('ticket_attended_by') ?: $actorName;
+        $dateRequested = Carbon::parse($request->input('date_requested'))->toDateTimeString();
+        $dateCompleted = $request->filled('date_completed')
+            ? Carbon::parse($request->input('date_completed'))->toDateTimeString()
+            : $dateRequested;
 
-        $datePrefix = \Carbon\Carbon::parse($dateRequested)->format('Ymd');
-        $countForDate = TicketDetail::where('client_referenceNo', 'like', $datePrefix.'-%')->count() + 1;
-        $reference = $datePrefix.'-'.str_pad($countForDate, 3, '0', STR_PAD_LEFT);
+        $assistedBy = $request->input('ticket_assisted_by');
+        if (is_array($assistedBy)) {
+            $filtered = array_filter(array_map('trim', $assistedBy));
+            $assistedBy = empty($filtered) ? 'None' : implode(', ', $filtered);
+        } else {
+            $assistedBy = filled($assistedBy) ? trim((string) $assistedBy) : 'None';
+        }
 
-        // Add reference number to validated data
-        $validated['client_referenceNo'] = $reference;
+        $actionsTaken = $request->filled('ticket_actions_taken')
+            ? $request->input('ticket_actions_taken')
+            : 'Actions logged per late request.';
 
-        // Save client and ticket details
-        TicketClientDetail::create($validated);
-
-        // ✅ Force NA when nature is "Others"
         $supportType = $request->ticket_nature_of_support === 'Others'
             ? 'NA'
-            : ($request->ticket_support_type ?? null);
+            : ($request->ticket_support_type ?: 'Others');
 
-        TicketDetail::create([
-            'client_referenceNo' => $reference,
-            'ticket_type' => $request->ticket_type,
-            'ticket_nature_of_support' => $request->ticket_nature_of_support,
-            'ticket_support_type' => $supportType,
-            'ticket_assigned_staff' => $attendedBy,
-            'ticket_attended_by' => $attendedBy,
-            'ticket_assisted_by' => $request->ticket_assisted_by,
-            'ticket_problem_that_needed_support' => $request->ticket_problem_that_needed_support,
-            'ticket_actions_taken' => $request->ticket_actions_taken,
-            'ticket_remarks' => $request->ticket_remarks,
-            'ticket_status' => 'Completed',
-            'date_requested' => $dateRequested,
-            'date_completed' => $dateCompleted,
-        ]);
+        $division = $request->filled('client_division_agency')
+            ? $request->input('client_division_agency')
+            : 'OTHERS';
 
-        // Save activity logs
-        $logs = [
-            [
-                'activity_name' => 'Ticket Created',
-                'activity_date' => $dateRequested,
-                'activity_user' => $clientName,
-            ],
-            [
-                'activity_name' => 'Ticket Assigned',
-                'activity_date' => $dateRequested,
-                'activity_user' => $attendedBy,
-            ],
-            [
-                'activity_name' => 'Ticket Attended',
-                'activity_date' => $dateRequested,
-                'activity_user' => $attendedBy,
-            ],
-            [
-                'activity_name' => 'Ticket Completed',
-                'activity_date' => $dateCompleted,
-                'activity_user' => $attendedBy,
-            ],
-        ];
+        $empID = $request->input('client_empID') ?: ($request->input('client_type') === 'External' ? 'None' : null);
+        $sex = $request->input('client_sex') ?: 'Prefer not to say';
 
-        foreach ($logs as $log) {
-            TicketActivityLog::create([
-                'client_referenceNo' => $reference,
-                'activity_name' => $log['activity_name'],
-                'activity_date' => $log['activity_date'],
-                'activity_user' => $log['activity_user'],
+        $reference = DB::transaction(function () use (
+            $validated,
+            $actorName,
+            $clientName,
+            $attendedBy,
+            $assistedBy,
+            $dateRequested,
+            $dateCompleted,
+            $actionsTaken,
+            $supportType,
+            $division,
+            $empID,
+            $sex,
+            $request
+        ) {
+            $ref = $this->generateReferenceForDate($dateRequested);
+
+            TicketClientDetail::create([
+                'client_referenceNo' => $ref,
+                'client_type' => $validated['client_type'],
+                'client_name' => $clientName,
+                'client_division_agency' => $division,
+                'client_empID' => $empID,
+                'client_sex' => $sex,
+            ]);
+
+            TicketDetail::create([
+                'client_referenceNo' => $ref,
+                'ticket_type' => $validated['ticket_type'],
+                'ticket_nature_of_support' => $validated['ticket_nature_of_support'],
+                'ticket_support_type' => $supportType,
+                'ticket_assigned_by' => $actorName,
+                'ticket_assigned_staff' => $attendedBy,
+                'ticket_attended_by' => $attendedBy,
+                'ticket_assisted_by' => $assistedBy,
+                'ticket_problem_that_needed_support' => $request->input('ticket_problem_that_needed_support'),
+                'ticket_actions_taken' => $actionsTaken,
+                'ticket_remarks' => $request->input('ticket_remarks') ?? '',
+                'ticket_status' => 'Completed',
+                'date_requested' => $dateRequested,
+                'date_completed' => $dateCompleted,
+            ]);
+
+            $logs = [
+                [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Created',
+                    'activity_date' => $dateRequested,
+                    'activity_user' => $clientName,
+                ],
+                [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Assigned',
+                    'activity_date' => $dateRequested,
+                    'activity_user' => $actorName,
+                ],
+                [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Attended',
+                    'activity_date' => $dateRequested,
+                    'activity_user' => $attendedBy,
+                ],
+                [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Completed',
+                    'activity_date' => $dateCompleted,
+                    'activity_user' => $attendedBy,
+                ],
+            ];
+
+            TicketActivityLog::insert($logs);
+
+            return $ref;
+        });
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Late ticket entry recorded successfully!',
+                'refNo' => $reference,
             ]);
         }
 
-        return redirect('/tickets-v2/data')->with('success', 'Ticket created!');
+        return back()->with([
+            'success' => 'Late ticket entry recorded successfully!',
+            'refNo' => $reference,
+        ]);
+    }
+
+    /** Generate sequence client reference number for a given date like 20250819-001 */
+    protected function generateReferenceForDate(string $dateString): string
+    {
+        $prefix = Carbon::parse($dateString)->format('Ymd');
+
+        $lastClient = DB::table('v2_ticket_client_details')
+            ->select('client_referenceNo')
+            ->where('client_referenceNo', 'like', "{$prefix}-%")
+            ->orderBy('client_referenceNo', 'desc')
+            ->lockForUpdate()
+            ->first();
+
+        $lastDetail = DB::table('v2_ticket_details')
+            ->select('client_referenceNo')
+            ->where('client_referenceNo', 'like', "{$prefix}-%")
+            ->orderBy('client_referenceNo', 'desc')
+            ->lockForUpdate()
+            ->first();
+
+        $nextSeq = 1;
+        foreach ([$lastClient, $lastDetail] as $last) {
+            if ($last && preg_match('/^'.$prefix.'-(\d+)$/', $last->client_referenceNo, $m)) {
+                $seq = (int) $m[1] + 1;
+                if ($seq > $nextSeq) {
+                    $nextSeq = $seq;
+                }
+            }
+        }
+
+        do {
+            $candidate = sprintf('%s-%03d', $prefix, $nextSeq);
+            $exists = DB::table('v2_ticket_client_details')->where('client_referenceNo', $candidate)->exists()
+                || DB::table('v2_ticket_details')->where('client_referenceNo', $candidate)->exists();
+            if ($exists) {
+                $nextSeq++;
+            }
+        } while ($exists);
+
+        return $candidate;
     }
 
     public function getEmployees()
@@ -409,38 +511,142 @@ class TicketV2Controller extends Controller
         return response()->json($employees);
     }
 
+    /**
+     * Completely delete tickets and all associated records across the database.
+     * Deletes:
+     * - Messages (v2_ticket_messages)
+     * - Attachments & files on disk (v2_ticket_attachment_details)
+     * - Activity audit logs (v2_ticket_activity_logs)
+     * - Events (v2_ticket_events)
+     * - Rating / CSM feedback details (v2_ticket_rating_details)
+     * - Technical ticket details (v2_ticket_details)
+     * - Client details (v2_ticket_client_details)
+     *
+     * @param  array<int, string|int>  $identifiers
+     */
+    protected function purgeTickets(array $identifiers): int
+    {
+        $identifiers = array_values(array_filter(array_unique($identifiers)));
+        if (empty($identifiers)) {
+            return 0;
+        }
+
+        return DB::transaction(function () use ($identifiers): int {
+            // 1. Locate all matching client ticket records
+            $tickets = TicketClientDetail::query()
+                ->whereIn('client_id', $identifiers)
+                ->orWhereIn('client_referenceNo', $identifiers)
+                ->get();
+
+            // Collect all reference numbers and client IDs
+            $refs = $tickets->pluck('client_referenceNo')->filter()->unique()->values()->all();
+            $clientIds = $tickets->pluck('client_id')->filter()->unique()->values()->all();
+
+            // Also check for any reference in ticket details if not found in client details
+            $extraDetails = TicketDetail::query()
+                ->whereIn('ticket_id', $identifiers)
+                ->orWhereIn('client_referenceNo', $identifiers)
+                ->get(['client_referenceNo', 'ticket_id']);
+
+            foreach ($extraDetails as $ed) {
+                if ($ed->client_referenceNo && ! in_array($ed->client_referenceNo, $refs, true)) {
+                    $refs[] = $ed->client_referenceNo;
+                }
+                if ($ed->ticket_id && ! in_array($ed->ticket_id, $clientIds, true)) {
+                    $clientIds[] = $ed->ticket_id;
+                }
+            }
+
+            // Also include any raw identifier passed that looks like a reference number
+            foreach ($identifiers as $id) {
+                if (is_string($id) && ! in_array($id, $refs, true)) {
+                    $refs[] = $id;
+                }
+            }
+
+            if (empty($refs) && empty($clientIds)) {
+                return 0;
+            }
+
+            // 2. Delete messages (v2_ticket_messages)
+            TicketMessage::whereIn('client_referenceNo', $refs)->delete();
+
+            // 3. Delete attachments (v2_ticket_attachment_details) and unlink physical files
+            $attachments = TicketAttachmentDetail::whereIn('client_referenceNo', $refs)->get();
+            foreach ($attachments as $att) {
+                if ($att->stored_path && Storage::disk('public')->exists($att->stored_path)) {
+                    try {
+                        Storage::disk('public')->delete($att->stored_path);
+                    } catch (\Throwable $e) {
+                        Log::warning("Could not delete ticket attachment file: {$att->stored_path}", ['error' => $e->getMessage()]);
+                    }
+                }
+            }
+            TicketAttachmentDetail::whereIn('client_referenceNo', $refs)->delete();
+
+            // 4. Delete activity logs (v2_ticket_activity_logs)
+            TicketActivityLog::whereIn('client_referenceNo', $refs)->delete();
+
+            // 5. Delete events (v2_ticket_events)
+            TicketEvent::whereIn('client_referenceNo', $refs)->delete();
+
+            // 6. Delete rating details (v2_ticket_rating_details)
+            TicketRatingDetail::whereIn('client_referenceNo', $refs)->delete();
+
+            // 7. Delete technical ticket details (v2_ticket_details)
+            TicketDetail::query()
+                ->where(function ($q) use ($refs, $clientIds) {
+                    if (! empty($refs)) {
+                        $q->whereIn('client_referenceNo', $refs);
+                    }
+                    if (! empty($clientIds)) {
+                        $q->orWhereIn('ticket_id', $clientIds);
+                    }
+                })
+                ->delete();
+
+            // 8. Delete parent client records (v2_ticket_client_details)
+            $deletedCount = TicketClientDetail::query()
+                ->where(function ($q) use ($refs, $clientIds) {
+                    if (! empty($refs)) {
+                        $q->whereIn('client_referenceNo', $refs);
+                    }
+                    if (! empty($clientIds)) {
+                        $q->orWhereIn('client_id', $clientIds);
+                    }
+                })
+                ->delete();
+
+            return max($deletedCount, count($refs));
+        });
+    }
+
     public function destroy($id)
     {
-        if (! Auth::check() || ! in_array(Auth::user()->role, ['Admin', 'Super Admin'], true)) {
+        if (! Auth::check() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
             abort(403, 'Only Admin can delete tickets.');
         }
 
-        DB::transaction(function () use ($id) {
-            // Load the ticket by client_id or reference number
-            $ticket = TicketClientDetail::with('detail')
-                ->where('client_id', $id)
-                ->orWhere('client_referenceNo', $id)
-                ->firstOrFail();
-            $ref = $ticket->client_referenceNo;
+        $exists = TicketClientDetail::where('client_id', $id)
+            ->orWhere('client_referenceNo', $id)
+            ->exists() || TicketDetail::where('ticket_id', $id)
+            ->orWhere('client_referenceNo', $id)
+            ->exists();
 
-            // 1) delete logs for this reference
-            TicketActivityLog::where('client_referenceNo', $ref)->delete();
+        if (! $exists) {
+            abort(404, 'Ticket not found.');
+        }
 
-            // 2) delete child ticket detail first (FK safety)
-            optional($ticket->detail)->delete();
-
-            // 3) delete parent
-            $ticket->delete();
-        });
+        $this->purgeTickets([$id]);
 
         if (request()->wantsJson()) {
             return response()->json([
                 'success' => true,
-                'message' => 'Ticket and related logs deleted.',
+                'message' => 'Ticket and all related records including messages deleted successfully.',
             ]);
         }
 
-        return back()->with('success', 'Ticket and related logs deleted.');
+        return back()->with('success', 'Ticket and all related records including messages deleted successfully.');
     }
 
     public function myTickets(Request $request)
@@ -563,8 +769,8 @@ class TicketV2Controller extends Controller
             'message' => 'required|string|min:1|max:2000',
         ]);
 
-        $exists = DB::table('v2_ticket_details')->where('client_referenceNo', $ref)->exists();
-        abort_unless($exists, 404, 'Ticket not found');
+        $ticket = DB::table('v2_ticket_details')->where('client_referenceNo', $ref)->first();
+        abort_unless($ticket, 404, 'Ticket not found');
 
         $staffName = Auth::user()?->name ?? 'Staff';
 
@@ -584,7 +790,62 @@ class TicketV2Controller extends Controller
             'activity_user' => $staffName,
         ]);
 
-        return response()->json(['ok' => true]);
+        // Look up client details for email notification
+        $client = DB::table('v2_ticket_client_details')
+            ->where('client_referenceNo', $ref)
+            ->first();
+
+        $clientEmail = trim((string) ($client?->client_email ?? ''));
+        $emailSent = false;
+
+        if ($clientEmail !== '' && filter_var($clientEmail, FILTER_VALIDATE_EMAIL)) {
+            $clientName = $client?->client_name ?? 'Client';
+            $problem = $ticket->ticket_problem_that_needed_support ?? null;
+
+            $clientAppUrl = config('app.client_url');
+            if (! $clientAppUrl) {
+                $host = request()->getHost();
+                if (str_contains($host, 'ticketing-admin.')) {
+                    $clientHost = str_replace('ticketing-admin.', 'ticketing.', $host);
+                    $scheme = request()->getScheme();
+                    $port = request()->getPort();
+                    $portStr = ($port && ! in_array($port, [80, 443])) ? ':'.$port : '';
+                    $clientAppUrl = "{$scheme}://{$clientHost}{$portStr}";
+                }
+            }
+            $baseUrl = $clientAppUrl ?: (request()->getHost() ? request()->getSchemeAndHttpHost() : config('app.url'));
+            $trackUrl = rtrim($baseUrl, '/').'/client?track='.rawurlencode($ref).'&open=1';
+
+            try {
+                $mailable = new StaffMessageNotificationMail(
+                    refNo: $ref,
+                    clientName: $clientName,
+                    staffName: $staffName,
+                    messageText: $validated['message'],
+                    trackUrl: $trackUrl,
+                    problem: $problem,
+                );
+
+                if (config('queue.default') === 'sync') {
+                    Mail::to($clientEmail)->send($mailable);
+                } else {
+                    Mail::to($clientEmail)->queue($mailable);
+                }
+                $emailSent = true;
+            } catch (\Throwable $e) {
+                Log::error('StaffMessageNotificationMail failed to send', [
+                    'ref' => $ref,
+                    'to' => $clientEmail,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return response()->json([
+            'ok' => true,
+            'email_notified' => $emailSent,
+            'notified_email' => $emailSent ? $clientEmail : null,
+        ]);
     }
 
     /**
@@ -831,7 +1092,9 @@ class TicketV2Controller extends Controller
         $type = $validated['ticket_type'] ?? null;
         $assignedBy = Auth::user()?->name ?? Auth::user()?->username ?? 'Staff';
 
-        DB::transaction(function () use ($validated, $staff, $type, $assignedBy): void {
+        $assignedTickets = [];
+
+        DB::transaction(function () use ($validated, $staff, $type, $assignedBy, &$assignedTickets): void {
             $details = TicketDetail::whereIn('ticket_id', $validated['ticket_ids'])
                 ->orWhereIn('client_referenceNo', $validated['ticket_ids'])
                 ->get();
@@ -855,17 +1118,86 @@ class TicketV2Controller extends Controller
                     'activity_date' => now(),
                     'activity_user' => $assignedBy,
                 ]);
+
+                $client = DB::table('v2_ticket_client_details')
+                    ->where('client_referenceNo', $detail->client_referenceNo)
+                    ->first();
+
+                $assignedTickets[] = [
+                    'refNo' => $detail->client_referenceNo,
+                    'clientName' => $client?->client_name ?? 'Client',
+                    'division' => $client?->client_division_agency ?? null,
+                    'problem' => $detail->ticket_problem_that_needed_support ?? null,
+                    'ticketType' => $detail->ticket_type ?? $type ?? 'Technical Support',
+                    'dateRequested' => $detail->date_requested ? Carbon::parse($detail->date_requested)->format('M d, Y h:i A') : null,
+                ];
             }
         });
+
+        // Look up staff user record & email notification recipient
+        $staffUser = User::where('name', $staff)
+            ->orWhere('username', $staff)
+            ->first();
+
+        $staffEmail = app(StaffService::class)->resolveStaffEmail($staff)
+            ?? ($staffUser ? app(StaffService::class)->resolveStaffEmail($staffUser->name) : null);
+        $staffEmail = trim((string) ($staffEmail ?? ''));
+        $emailSent = false;
+
+        if ($staffEmail !== '' && filter_var($staffEmail, FILTER_VALIDATE_EMAIL) && ! empty($assignedTickets)) {
+            $adminBaseUrl = config('app.url');
+            if (! $adminBaseUrl || str_contains($adminBaseUrl, 'localhost')) {
+                if (request()->getHost()) {
+                    $adminBaseUrl = request()->getSchemeAndHttpHost();
+                }
+            }
+            $adminBaseUrl = rtrim($adminBaseUrl ?: 'http://ticketing-admin.stii.local', '/');
+
+            if (count($assignedTickets) === 1) {
+                $viewUrl = "{$adminBaseUrl}/admin/my-tickets?search=".rawurlencode($assignedTickets[0]['refNo']);
+            } else {
+                $viewUrl = "{$adminBaseUrl}/admin/my-tickets";
+            }
+
+            try {
+                $mailable = new TicketAssignedStaffNotificationMail(
+                    staffName: $staffUser?->name ?? $staff,
+                    assignedBy: $assignedBy,
+                    tickets: $assignedTickets,
+                    viewUrl: $viewUrl,
+                );
+
+                if (config('queue.default') === 'sync') {
+                    Mail::to($staffEmail)->send($mailable);
+                } else {
+                    Mail::to($staffEmail)->queue($mailable);
+                }
+                $emailSent = true;
+            } catch (\Throwable $e) {
+                Log::error('TicketAssignedStaffNotificationMail failed to send', [
+                    'staff' => $staff,
+                    'to' => $staffEmail,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $count = count($assignedTickets) ?: count($validated['ticket_ids']);
+        $ticketWord = $count === 1 ? 'ticket' : 'tickets';
+        $successMsg = $emailSent
+            ? "{$count} {$ticketWord} assigned to {$staff} and staff notified via email!"
+            : "{$count} {$ticketWord} assigned to {$staff} successfully.";
 
         if ($request->wantsJson()) {
             return response()->json([
                 'success' => true,
-                'message' => count($validated['ticket_ids']).' tickets assigned to '.$staff.' successfully.',
+                'email_notified' => $emailSent,
+                'notified_email' => $emailSent ? $staffEmail : null,
+                'message' => $successMsg,
             ]);
         }
 
-        return back()->with('success', count($validated['ticket_ids']).' tickets assigned to '.$staff.' successfully.');
+        return back()->with('success', $successMsg);
     }
 
     /**
@@ -928,7 +1260,7 @@ class TicketV2Controller extends Controller
      */
     public function bulkDelete(Request $request)
     {
-        if (! Auth::user() || ! in_array(Auth::user()->role, ['Admin', 'Super Admin'], true)) {
+        if (! Auth::user() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
             abort(403, 'Only Admin can delete tickets.');
         }
 
@@ -937,40 +1269,17 @@ class TicketV2Controller extends Controller
             'ticket_ids.*' => 'required',
         ]);
 
-        $deletedCount = 0;
-        DB::transaction(function () use ($validated, &$deletedCount): void {
-            $tickets = TicketClientDetail::with('detail')
-                ->where(function ($q) use ($validated) {
-                    $q->whereIn('client_id', $validated['ticket_ids'])
-                        ->orWhereIn('client_referenceNo', $validated['ticket_ids']);
-                })
-                ->get();
-
-            foreach ($tickets as $ticket) {
-                $ref = $ticket->client_referenceNo;
-
-                // 1) Delete related activity logs
-                TicketActivityLog::where('client_referenceNo', $ref)->delete();
-
-                // 2) Delete child detail
-                optional($ticket->detail)->delete();
-
-                // 3) Delete parent client record
-                $ticket->delete();
-
-                $deletedCount++;
-            }
-        });
+        $deletedCount = $this->purgeTickets($validated['ticket_ids']);
 
         if ($request->wantsJson()) {
             return response()->json([
                 'success' => true,
                 'deleted_count' => $deletedCount,
-                'message' => "{$deletedCount} tickets and related records deleted successfully.",
+                'message' => "{$deletedCount} tickets and all related records including messages deleted successfully.",
             ]);
         }
 
-        return back()->with('success', "{$deletedCount} tickets and related records deleted successfully.");
+        return back()->with('success', "{$deletedCount} tickets and all related records including messages deleted successfully.");
     }
 
     /**

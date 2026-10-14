@@ -29,17 +29,22 @@ class LoginRequest extends FormRequest
     {
         $this->ensureIsNotRateLimited();
 
-        // if (! Auth::attempt($this->only('email', 'password'), $this->boolean('remember'))) {
         if (! Auth::attempt($this->only('username', 'password'), $this->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey());
 
-            // throw ValidationException::withMessages([
-            //     'email' => trans('auth.failed'),
-            // ]);
             throw ValidationException::withMessages([
                 'username' => trans('auth.failed'),
             ]);
+        }
 
+        $user = Auth::user();
+        if ($user && (string) $user->isActivated === '0') {
+            Auth::logout();
+            RateLimiter::hit($this->throttleKey());
+
+            throw ValidationException::withMessages([
+                'username' => 'Your account has been deactivated. Please contact an administrator.',
+            ]);
         }
 
         RateLimiter::clear($this->throttleKey());
