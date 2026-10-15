@@ -58,6 +58,7 @@ const completionForm = reactive({
     endDate: '',     // date (optional)
     venue: '',       // string (required if Events)
     remarks: '',     // text (optional)
+    otherRequest: '', // text (optional)
   },
 })
 
@@ -101,7 +102,7 @@ const allSupportTypeOptions = computed(() => {
 
 // Safely read event values from various ticket shapes
 function readEventField(name) {
-  // name is 'start_date' | 'end_date' | 'venue' | 'remarks'
+  // name is 'start_date' | 'end_date' | 'venue' | 'remarks' | 'other_request'
   const withPrefix = `event_${name}`
 
   return (
@@ -112,6 +113,10 @@ function readEventField(name) {
     // nested event object, prefixed names (event_start_date)
     props.ticket?.event?.[withPrefix] ??
     props.ticket?.detail?.event?.[withPrefix] ??
+
+    // camelCase variants (otherRequest)
+    props.ticket?.event?.[name === 'other_request' ? 'otherRequest' : name] ??
+    props.ticket?.detail?.event?.[name === 'other_request' ? 'otherRequest' : name] ??
 
     // sibling shapes without nesting
     props.ticket?.events?.[name] ??
@@ -161,10 +166,11 @@ watch(
     errorMsg.value = ''
 
     // Prefill events block from v2_ticket_events
-    completionForm.events.startDate = readEventField('start_date') || ''
-    completionForm.events.endDate   = readEventField('end_date') || ''
-    completionForm.events.venue     = readEventField('venue') || ''
-    completionForm.events.remarks   = readEventField('remarks') || ''
+    completionForm.events.startDate    = readEventField('start_date') || ''
+    completionForm.events.endDate      = readEventField('end_date') || ''
+    completionForm.events.venue        = readEventField('venue') || ''
+    completionForm.events.remarks      = readEventField('remarks') || ''
+    completionForm.events.otherRequest = readEventField('other_request') || ''
 
     applyTypeRules(completionForm.supportType, /*isInitial*/ true)
   },
@@ -288,6 +294,7 @@ async function submitCompletion() {
     payload.event_end_date   = completionForm.events.endDate || null
     payload.event_venue      = completionForm.events.venue?.trim() || null
     payload.event_remarks    = completionForm.events.remarks?.trim() || null
+    payload.other_request    = completionForm.events.otherRequest?.trim() || null
   }
 
   submitting.value = true
@@ -296,8 +303,9 @@ async function submitCompletion() {
     await router.put(`/tickets-complete/${ticketId}`, payload, {
       preserveScroll: true,
       onStart: () => { /* already guarded by submitting flag */ },
-      onSuccess: () => {
-        toast.success('Ticket completed successfully!')
+      onSuccess: (page) => {
+        const flashMsg = page?.props?.flash?.success || 'Ticket completed successfully and client notified via email!'
+        toast.success(flashMsg)
         emit('success', { id: ticketId })
         closeModal()
       },
@@ -344,6 +352,11 @@ async function submitCompletion() {
 
       <div class="flex-1 overflow-y-auto space-y-4 px-6 py-5">
         <div v-if="errorMsg" class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{{ errorMsg }}</div>
+
+        <div class="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-xs text-emerald-800">
+          <i class="fa-solid fa-envelope-circle-check text-emerald-600 text-sm shrink-0"></i>
+          <span>An email notification with rating and resolution details will automatically be sent to the client upon completion.</span>
+        </div>
 
         <!-- Request Type -->
         <div>
@@ -412,7 +425,11 @@ async function submitCompletion() {
           </div>
           <div>
             <label class="mb-1 block text-sm font-medium text-gray-700">Event Remarks (optional)</label>
-            <textarea v-model="completionForm.events.remarks" rows="2" class="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500"></textarea>
+            <textarea v-model="completionForm.events.remarks" rows="2" class="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500" placeholder="Program notes, setup details, etc..."></textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">Other Request (optional)</label>
+            <textarea v-model="completionForm.events.otherRequest" rows="2" class="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500" placeholder="Equipment, accessories, or other requests..."></textarea>
           </div>
         </div>
 

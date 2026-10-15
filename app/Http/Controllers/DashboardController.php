@@ -522,6 +522,7 @@ class DashboardController extends Controller
         // Unassigned tickets needing dispatch
         $unassignedTickets = DB::table('v2_ticket_details as td')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
+            ->leftJoin('v2_ticket_events as te', 'te.client_referenceNo', '=', 'td.client_referenceNo')
             ->where(function ($q): void {
                 $q->where('td.ticket_status', 'New')
                     ->orWhereNull('td.ticket_assigned_staff')
@@ -542,6 +543,11 @@ class DashboardController extends Controller
                 'td.ticket_problem_that_needed_support',
                 'td.date_requested',
                 'td.created_at',
+                'te.event_start_date',
+                'te.event_end_date',
+                'te.event_venue',
+                'te.event_remarks',
+                'te.other_request',
             ])
             ->orderBy('td.date_requested', 'desc')
             ->limit(6)
@@ -550,6 +556,7 @@ class DashboardController extends Controller
         // Overdue tickets (> 24h active)
         $overdueTickets = DB::table('v2_ticket_details as td')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
+            ->leftJoin('v2_ticket_events as te', 'te.client_referenceNo', '=', 'td.client_referenceNo')
             ->whereIn('td.ticket_status', ['New', 'Pending', 'In Progress'])
             ->where('td.date_requested', '<=', now()->subHours(24))
             ->select([
@@ -566,6 +573,11 @@ class DashboardController extends Controller
                 'td.ticket_nature_of_support',
                 'td.ticket_problem_that_needed_support',
                 'td.date_requested',
+                'te.event_start_date',
+                'te.event_end_date',
+                'te.event_venue',
+                'te.event_remarks',
+                'te.other_request',
             ])
             ->orderBy('td.date_requested', 'asc')
             ->limit(6)

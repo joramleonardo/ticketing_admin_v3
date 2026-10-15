@@ -274,6 +274,24 @@
                   class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
                 />
               </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event Remarks (Optional)</label>
+                <textarea
+                  v-model="assignForm.eventRemarks"
+                  rows="2"
+                  placeholder="Program notes, coverage instructions..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Other Request (Optional)</label>
+                <textarea
+                  v-model="assignForm.otherRequest"
+                  rows="2"
+                  placeholder="Equipment requests, accessories, microphones, etc..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
             </template>
           </div>
 
@@ -315,6 +333,11 @@
             </button>
           </div>
 
+          <div class="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-100/70 border border-emerald-200/80 rounded-lg px-3 py-2">
+            <i class="fa-solid fa-envelope-circle-check text-emerald-600 text-sm shrink-0"></i>
+            <span>An email notification with rating and resolution details will automatically be sent to the client upon completion.</span>
+          </div>
+
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             <div>
               <label class="block text-xs font-semibold text-slate-700 mb-1">Support Type *</label>
@@ -327,6 +350,57 @@
                 <option value="Events">Events</option>
               </select>
             </div>
+
+            <!-- Optional Events details if type is Events -->
+            <template v-if="completeForm.supportType === 'Events'">
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event Start Date *</label>
+                <input
+                  v-model="completeForm.eventStartDate"
+                  type="date"
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm py-2 px-3 bg-white"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event End Date (Optional)</label>
+                <input
+                  v-model="completeForm.eventEndDate"
+                  type="date"
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm py-2 px-3 bg-white"
+                />
+              </div>
+
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event Venue *</label>
+                <input
+                  v-model="completeForm.eventVenue"
+                  type="text"
+                  placeholder="e.g. STII Boardroom / Atrium / Online"
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm py-2 px-3 bg-white"
+                />
+              </div>
+
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event Remarks (Optional)</label>
+                <textarea
+                  v-model="completeForm.eventRemarks"
+                  rows="2"
+                  placeholder="Program notes, coverage instructions..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
+
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Other Request (Optional)</label>
+                <textarea
+                  v-model="completeForm.otherRequest"
+                  rows="2"
+                  placeholder="Equipment requests, accessories, microphones, etc..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
+            </template>
 
             <!-- Nature of Support (if Technical Support) -->
             <div v-if="completeForm.supportType === 'Technical Support'">
@@ -537,6 +611,24 @@
                   class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
                 />
               </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Event Remarks (Optional)</label>
+                <textarea
+                  v-model="editForm.eventRemarks"
+                  rows="2"
+                  placeholder="Special instructions, program notes..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Other Request (Optional)</label>
+                <textarea
+                  v-model="editForm.otherRequest"
+                  rows="2"
+                  placeholder="Equipment requests, accessories, microphones, etc..."
+                  class="w-full rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm py-2 px-3 bg-white"
+                ></textarea>
+              </div>
             </template>
 
             <div class="md:col-span-2">
@@ -641,7 +733,7 @@
 
               <!-- Event Information Block (Visible when Events type or event details exist) -->
               <div
-                v-if="(ticketDetail.ticket_type === 'Events' || ticket?.event || ticketDetail.event_start_date) && (ticket?.event?.event_start_date || ticketDetail.event_start_date || ticket?.event?.event_venue || ticketDetail.event_venue)"
+                v-if="ticketDetail.ticket_type === 'Events' || ticketEvent?.event_start_date || ticketEvent?.event_venue || ticketEvent?.event_remarks || ticketEvent?.other_request || ticket?.event || ticketDetail.event"
                 class="p-4 sm:p-5 rounded-2xl bg-blue-50/40 border border-blue-200/80 shadow-2xs space-y-3"
               >
                 <div class="flex items-center justify-between pb-2 border-b border-blue-200/60">
@@ -655,17 +747,28 @@
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div v-if="ticket?.event?.event_start_date || ticketDetail.event_start_date">
+                  <div v-if="ticketEvent?.event_start_date">
                     <span class="text-slate-400 block text-[11px]">Start Date:</span>
-                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticket?.event?.event_start_date || ticketDetail.event_start_date) }}</span>
+                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticketEvent.event_start_date) }}</span>
                   </div>
-                  <div v-if="ticket?.event?.event_end_date || ticketDetail.event_end_date">
+                  <div v-if="ticketEvent?.event_end_date">
                     <span class="text-slate-400 block text-[11px]">End Date:</span>
-                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticket?.event?.event_end_date || ticketDetail.event_end_date) }}</span>
+                    <span class="font-semibold text-slate-700">{{ formatDateTime(ticketEvent.event_end_date) }}</span>
                   </div>
-                  <div v-if="ticket?.event?.event_venue || ticketDetail.event_venue" class="sm:col-span-2">
+                  <div v-if="ticketEvent?.event_venue" class="sm:col-span-2">
                     <span class="text-slate-400 block text-[11px]">Venue:</span>
-                    <span class="font-semibold text-slate-700">{{ ticket?.event?.event_venue || ticketDetail.event_venue }}</span>
+                    <span class="font-semibold text-slate-700">{{ ticketEvent.event_venue }}</span>
+                  </div>
+                  <div v-if="ticketEvent?.event_remarks" class="sm:col-span-2 pt-1 border-t border-blue-200/40">
+                    <span class="text-slate-400 block text-[11px]">Event Remarks:</span>
+                    <span class="font-medium text-slate-700 whitespace-pre-wrap">{{ ticketEvent.event_remarks }}</span>
+                  </div>
+                  <div v-if="ticketEvent?.other_request" class="sm:col-span-2 pt-1 border-t border-blue-200/40">
+                    <span class="text-slate-400 block text-[11px]">Other Request:</span>
+                    <span class="font-medium text-slate-700 whitespace-pre-wrap">{{ ticketEvent.other_request }}</span>
+                  </div>
+                  <div v-if="!ticketEvent?.event_start_date && !ticketEvent?.event_venue && !ticketEvent?.event_remarks && !ticketEvent?.other_request" class="sm:col-span-2 text-slate-500 italic text-[11px]">
+                    No specific event details recorded yet. Use Assign or Edit to log event schedule and venue.
                   </div>
                 </div>
               </div>
@@ -1397,8 +1500,9 @@ async function submitComplete() {
 
   router.put(`/tickets-complete/${ticketId.value}`, payload, {
     preserveScroll: true,
-    onSuccess: () => {
-      toast.success('Ticket completed successfully!')
+    onSuccess: (page) => {
+      const flashMsg = page?.props?.flash?.success || 'Ticket completed successfully and client notified via email!'
+      toast.success(flashMsg)
       activeActionPanel.value = null
 
       if (localTicket.value) {

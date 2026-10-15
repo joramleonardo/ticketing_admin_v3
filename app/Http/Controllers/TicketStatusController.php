@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Enums\SupportNature;
 use App\Enums\TicketStatus;
 use App\Mail\TicketAssignedStaffNotificationMail;
-use App\Mail\TicketAttendedNotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\TicketClientDetail;
@@ -14,6 +13,8 @@ use App\Models\TicketEvent;
 use App\Models\TicketStatus as TicketStatusModel;
 use App\Models\User;
 use App\Services\StaffService;
+use App\Services\TicketNotificationService;
+use App\Support\TicketClassification;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -33,15 +34,18 @@ class TicketStatusController extends Controller
             'ticket_type' => 'nullable|string|max:255',
             'ticket_nature_of_support' => ['nullable', Rule::in(['Events', 'Hardware', 'Software', 'Hardware & Software', 'System Modification', 'Livestream', 'Others'])],
             'ticket_support_type' => 'nullable|string|max:255',
-            'ticket_related_type' => ['nullable', Rule::in([
-                'Installation related', 'Livestream related', 'Network related', 'PC Setup & Troubleshooting', 'Printer related', 'STARBOOKS related', 'Website and System related', 'Events related', 'Others',
-            ])],
+            'ticket_related_type' => ['nullable', Rule::in(array_merge(TicketClassification::relatedTypes(), ['Server related']))],
             'ticket_assisted_by' => 'nullable|string',
             'ticket_actions_taken' => 'nullable|string',
             'ticket_remarks' => 'nullable|string',
+            'event_start_date' => ['sometimes', 'nullable', 'date'],
+            'event_end_date' => ['nullable', 'date'],
+            'event_venue' => ['nullable', 'string', 'max:255'],
+            'event_remarks' => ['sometimes', 'nullable', 'string'],
+            'other_request' => ['sometimes', 'nullable', 'string'],
         ]);
 
-        DB::transaction(function () use ($id, $validated): void {
+        DB::transaction(function () use ($id, $validated, $request): void {
             $detail = TicketDetail::lockForUpdate()->findOrFail($id);
 
             if ($detail->ticket_status !== TicketStatus::InProgress->value) {
@@ -60,7 +64,40 @@ class TicketStatusController extends Controller
                 'date_completed' => now(),
             ], fn ($v) => ! is_null($v));
 
+            if (empty($detail->ticket_attended_by) && auth()->check()) {
+                $updateData['ticket_attended_by'] = auth()->user()?->name;
+            }
+
             $detail->update($updateData);
+
+            // Handle event details if Events type or event fields submitted
+            $isEvents = (isset($updateData['ticket_type']) && strcasecmp($updateData['ticket_type'], 'Events') === 0)
+                || (isset($updateData['ticket_nature_of_support']) && strcasecmp($updateData['ticket_nature_of_support'], 'Events') === 0)
+                || (strcasecmp($detail->ticket_type ?? '', 'Events') === 0)
+                || $request->filled('event_start_date');
+
+            if ($isEvents && ($request->filled('event_start_date') || $request->filled('event_venue') || $request->filled('event_remarks') || $request->filled('other_request'))) {
+                if (! empty($validated['event_end_date']) && ! empty($validated['event_start_date'])) {
+                    if (strtotime($validated['event_end_date']) < strtotime($validated['event_start_date'])) {
+                        abort(422, 'Event end date must be the same day or after the start date.');
+                    }
+                }
+
+                $existingEvent = TicketEvent::where('client_referenceNo', $detail->client_referenceNo)->first();
+
+                $eventAttrs = array_filter([
+                    'event_start_date' => $validated['event_start_date'] ?? ($existingEvent?->event_start_date ?? Carbon::today()->toDateString()),
+                    'event_end_date' => array_key_exists('event_end_date', $validated) ? $validated['event_end_date'] : ($existingEvent?->event_end_date),
+                    'event_venue' => array_key_exists('event_venue', $validated) ? trim((string) $validated['event_venue']) : ($existingEvent?->event_venue ?? 'DOST-STII'),
+                    'event_remarks' => array_key_exists('event_remarks', $validated) ? $validated['event_remarks'] : ($existingEvent?->event_remarks),
+                    'other_request' => array_key_exists('other_request', $validated) ? $validated['other_request'] : ($existingEvent?->other_request),
+                ], fn ($v) => ! is_null($v));
+
+                TicketEvent::updateOrCreate(
+                    ['client_referenceNo' => $detail->client_referenceNo],
+                    $eventAttrs
+                );
+            }
 
             TicketActivityLog::create([
                 'client_referenceNo' => $detail->client_referenceNo,
@@ -72,39 +109,16 @@ class TicketStatusController extends Controller
 
         $detail = TicketDetail::findOrFail($id);
         $ref = $detail->client_referenceNo;
+        $staffName = $detail->ticket_attended_by
+            ?: ($detail->ticket_assigned_staff ?: (auth()->user()?->name ?? 'IT Support Specialist'));
 
-        $client = TicketClientDetail::where('client_referenceNo', $ref)->first();
-        $clientEmail = trim($client->client_email ?? '');
-        $clientName = $client->client_name ?? 'Customer';
-        $empCode = $client->client_empID ?? null;
+        $emailSent = app(TicketNotificationService::class)->sendTicketCompletedNotification($ref, $staffName);
 
-        if ($clientEmail !== '') {
-            $rateUrl = "http://ticketing2.stii.local/client/rate/{$ref}";
+        $successMsg = $emailSent
+            ? 'Ticket completed successfully and client notified via email!'
+            : 'Ticket completed successfully!';
 
-            try {
-                $mailable = new \App\Mail\TicketCompletedMail(
-                    refNo: $ref,
-                    clientName: $clientName,
-                    problem: $detail->ticket_problem_that_needed_support,
-                    employeeCode: $empCode,
-                    rateUrl: $rateUrl
-                );
-
-                if (config('queue.default') === 'sync') {
-                    Mail::to($clientEmail)->send($mailable);
-                } else {
-                    Mail::to($clientEmail)->queue($mailable);
-                }
-            } catch (\Throwable $e) {
-                \Log::error('TicketCompletedMail failed', [
-                    'ref' => $ref,
-                    'to' => $clientEmail,
-                    'err' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        return back()->with('success', 'Ticket completed successfully!');
+        return back()->with('success', $successMsg);
     }
 
     /** Cancel ticket (Terminal state with mandatory reason) */
@@ -212,9 +226,7 @@ class TicketStatusController extends Controller
             ],
             'ticket_related_type' => [
                 'sometimes', 'nullable',
-                Rule::in([
-                    'Installation related', 'Livestream related', 'Network related', 'PC Setup & Troubleshooting', 'Printer related', 'STARBOOKS related', 'Website and System related', 'Events related', 'Others',
-                ]),
+                Rule::in(array_merge(TicketClassification::relatedTypes(), ['Server related'])),
             ],
 
             // Events fields (nullable here; we’ll require them conditionally)
@@ -311,37 +323,60 @@ class TicketStatusController extends Controller
             }
 
             if ($isEvents) {
-                // Require start_date and venue; end_date optional but must be >= start if present
-                $eventData = $request->validate([
-                    'event_start_date' => ['required', 'date'],
-                    'event_end_date' => ['nullable', 'date'],
-                    'event_venue' => ['nullable', 'string', 'max:255'],
-                    'event_remarks' => ['sometimes', 'nullable', 'string'],
-                ]);
-
-                // If end provided, ensure end >= start
-                if (! empty($eventData['event_end_date'])) {
-                    if (strtotime($eventData['event_end_date']) < strtotime($eventData['event_start_date'])) {
-                        abort(422, 'Event end date must be the same day or after the start date.');
-                    }
+                if (empty($detail->ticket_nature_of_support)) {
+                    $detail->ticket_nature_of_support = 'Events';
+                    $detail->save();
                 }
 
-                $clientRef = $detail->client_referenceNo; // source of truth
+                $hasEventData = $request->has('event_start_date')
+                    || $request->has('event_end_date')
+                    || $request->has('event_venue')
+                    || $request->has('event_remarks')
+                    || $request->has('other_request');
 
-                // One-event-per-ticket (update if exists else create)
-                TicketEvent::updateOrCreate(
-                    ['client_referenceNo' => $clientRef],
-                    [
-                        'event_start_date' => $eventData['event_start_date'],
-                        'event_end_date' => $eventData['event_end_date'] ?? null,
-                        'event_venue' => trim($eventData['event_venue']),
-                        'event_remarks' => $eventData['event_remarks'] ?? null,
-                    ]
-                );
+                if ($hasEventData) {
+                    $eventData = $request->validate([
+                        'event_start_date' => ['nullable', 'date'],
+                        'event_end_date' => ['nullable', 'date'],
+                        'event_venue' => ['nullable', 'string', 'max:255'],
+                        'event_remarks' => ['sometimes', 'nullable', 'string'],
+                        'other_request' => ['sometimes', 'nullable', 'string'],
+                    ]);
+
+                    // If end provided, ensure end >= start
+                    if (! empty($eventData['event_end_date']) && ! empty($eventData['event_start_date'])) {
+                        if (strtotime($eventData['event_end_date']) < strtotime($eventData['event_start_date'])) {
+                            abort(422, 'Event end date must be the same day or after the start date.');
+                        }
+                    }
+
+                    $clientRef = $detail->client_referenceNo; // source of truth
+                    $existingEvent = TicketEvent::where('client_referenceNo', $clientRef)->first();
+
+                    $eventAttributes = array_filter([
+                        'event_start_date' => $eventData['event_start_date'] ?? ($existingEvent?->event_start_date ?? Carbon::today()->toDateString()),
+                        'event_end_date' => array_key_exists('event_end_date', $eventData) ? $eventData['event_end_date'] : ($existingEvent?->event_end_date),
+                        'event_venue' => array_key_exists('event_venue', $eventData) ? trim((string) $eventData['event_venue']) : ($existingEvent?->event_venue ?? 'DOST-STII'),
+                        'event_remarks' => array_key_exists('event_remarks', $eventData) ? $eventData['event_remarks'] : ($existingEvent?->event_remarks),
+                        'other_request' => array_key_exists('other_request', $eventData) ? $eventData['other_request'] : ($existingEvent?->other_request),
+                    ], fn ($v) => ! is_null($v));
+
+                    // One-event-per-ticket (update if exists else create)
+                    TicketEvent::updateOrCreate(
+                        ['client_referenceNo' => $clientRef],
+                        $eventAttributes
+                    );
+                }
             }
         });
 
         if ($staffAssignedChanged && $assignedStaffName) {
+            // Notify client about assigned IT specialist
+            app(TicketNotificationService::class)->sendTicketAssignedClientNotification(
+                $detail->client_referenceNo,
+                $assignedStaffName
+            );
+
             $staffUser = User::where('name', $assignedStaffName)
                 ->orWhere('username', $assignedStaffName)
                 ->first();
@@ -440,63 +475,7 @@ class TicketStatusController extends Controller
 
         // Look up client details for email notification
         $ref = $detail->client_referenceNo;
-        $client = TicketClientDetail::where('client_referenceNo', $ref)->first();
-        $clientEmail = trim((string) ($client?->client_email ?? ''));
-
-        // Fallback to ticket_employees if client_email is missing but employee ID exists
-        if ($clientEmail === '' && ! empty($client?->client_empID)) {
-            $emp = DB::table('ticket_employees')
-                ->where('employee_code', $client->client_empID)
-                ->first();
-            if (! empty($emp?->email)) {
-                $clientEmail = trim((string) $emp->email);
-            }
-        }
-
-        $emailSent = false;
-        if ($clientEmail !== '' && filter_var($clientEmail, FILTER_VALIDATE_EMAIL)) {
-            $clientName = $client?->client_name ?? 'Client';
-            $problem = $detail->ticket_problem_that_needed_support;
-            $ticketType = $detail->ticket_type;
-
-            $clientAppUrl = config('app.client_url');
-            if (! $clientAppUrl) {
-                $host = request()->getHost();
-                if (str_contains($host, 'ticketing-admin.')) {
-                    $clientHost = str_replace('ticketing-admin.', 'ticketing.', $host);
-                    $scheme = request()->getScheme();
-                    $port = request()->getPort();
-                    $portStr = ($port && ! in_array($port, [80, 443])) ? ':'.$port : '';
-                    $clientAppUrl = "{$scheme}://{$clientHost}{$portStr}";
-                }
-            }
-            $baseUrl = $clientAppUrl ?: (request()->getHost() ? request()->getSchemeAndHttpHost() : config('app.url'));
-            $trackUrl = rtrim($baseUrl, '/').'/client?track='.rawurlencode($ref).'&open=1';
-
-            try {
-                $mailable = new TicketAttendedNotificationMail(
-                    refNo: $ref,
-                    clientName: $clientName,
-                    staffName: $staffName,
-                    trackUrl: $trackUrl,
-                    problem: $problem,
-                    ticketType: $ticketType,
-                );
-
-                if (config('queue.default') === 'sync') {
-                    Mail::to($clientEmail)->send($mailable);
-                } else {
-                    Mail::to($clientEmail)->queue($mailable);
-                }
-                $emailSent = true;
-            } catch (\Throwable $e) {
-                Log::error('TicketAttendedNotificationMail failed to send', [
-                    'ref' => $ref,
-                    'to' => $clientEmail,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
+        $emailSent = app(TicketNotificationService::class)->sendTicketAttendedNotification($ref, $staffName);
 
         $successMsg = $emailSent
             ? 'Ticket attended successfully and client notified via email!'
@@ -516,16 +495,41 @@ class TicketStatusController extends Controller
             'client_division_agency' => 'nullable|string|max:255',
             // Ticket
             'ticket_type' => 'required|string|max:255',
-            'ticket_problem_that_needed_support' => 'required|string',
+            'ticket_problem_that_needed_support' => 'nullable|string',
             'ticket_assigned_staff' => 'nullable|string|max:255',
             'ticket_attended_by' => 'nullable|string|max:255',
+            // Events
+            'event_start_date' => 'nullable|date',
+            'event_end_date' => 'nullable|date',
+            'event_venue' => 'nullable|string|max:255',
+            'event_remarks' => 'nullable|string',
+            'other_request' => 'nullable|string',
         ]);
+
+        $isEvents = (strcasecmp($validated['ticket_type'], 'Events') === 0);
+
+        if (! $isEvents && empty(trim((string) ($validated['ticket_problem_that_needed_support'] ?? '')))) {
+            $request->validate([
+                'ticket_problem_that_needed_support' => 'required|string',
+            ]);
+        }
+
+        $problem = trim((string) ($validated['ticket_problem_that_needed_support'] ?? ''));
+        if ($problem === '') {
+            if ($isEvents) {
+                $problem = $validated['other_request']
+                    ?: ($validated['event_remarks']
+                        ?: 'Event Support: '.($validated['event_venue'] ?: 'Event'));
+            } else {
+                $problem = 'No description provided';
+            }
+        }
 
         $actorName = auth()->user()->name ?? 'System';
         $assignedStaff = $request->input('ticket_assigned_staff') ?: $actorName;
         $attendedBy = $request->input('ticket_attended_by') ?: $assignedStaff;
 
-        $refNo = DB::transaction(function () use ($validated, $actorName, $assignedStaff, $attendedBy) {
+        $refNo = DB::transaction(function () use ($validated, $actorName, $assignedStaff, $attendedBy, $isEvents, $problem, $request) {
             // 1) Generate new reference number (YYYYMMDD-###)
             $refNo = $this->generateClientReferenceNo();
 
@@ -543,13 +547,26 @@ class TicketStatusController extends Controller
             TicketDetail::create([
                 'client_referenceNo' => $refNo,
                 'ticket_type' => $validated['ticket_type'],
+                'ticket_nature_of_support' => $isEvents ? 'Events' : null,
                 'ticket_assigned_by' => $actorName,
                 'ticket_assigned_staff' => $assignedStaff,
                 'ticket_attended_by' => $attendedBy,
                 'ticket_status' => 'In Progress',
-                'ticket_problem_that_needed_support' => $validated['ticket_problem_that_needed_support'],
+                'ticket_problem_that_needed_support' => $problem,
                 'date_requested' => Carbon::now(),
             ]);
+
+            // 3.5) Event details if Events
+            if ($isEvents || $request->filled('event_start_date') || $request->filled('event_venue')) {
+                TicketEvent::create([
+                    'client_referenceNo' => $refNo,
+                    'event_start_date' => $validated['event_start_date'] ?? Carbon::today()->toDateString(),
+                    'event_end_date' => $validated['event_end_date'] ?? null,
+                    'event_venue' => isset($validated['event_venue']) ? trim((string) $validated['event_venue']) : 'DOST-STII',
+                    'event_remarks' => $validated['event_remarks'] ?? null,
+                    'other_request' => $validated['other_request'] ?? null,
+                ]);
+            }
 
             // 4) Activity logs (Created, Assigned, Attended)
             $now = Carbon::now();
@@ -576,6 +593,9 @@ class TicketStatusController extends Controller
 
             return $refNo;
         });
+
+        // Send initial acknowledgment email to client (Root of email thread)
+        app(TicketNotificationService::class)->sendTicketCreatedNotification($refNo);
 
         // Flash refNo so you can display it without extra queries
         return back()->with([

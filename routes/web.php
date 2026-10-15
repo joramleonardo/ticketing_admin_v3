@@ -9,6 +9,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\MyTicketsController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RatingReportsController;
+use App\Http\Controllers\TicketEventController;
 use App\Http\Controllers\TicketStatusController;
 use App\Http\Controllers\TicketV2Controller;
 use Illuminate\Support\Facades\Auth;
@@ -74,6 +75,8 @@ Route::middleware('auth')->group(function () {
     Route::get('/admin/my-tickets', [MyTicketsController::class,  'index'])->name('admin.my-tickets');
     Route::get('/admin/my-tickets/check-updates', [MyTicketsController::class, 'checkUpdates'])->name('admin.my-tickets.check-updates');
     Route::get('/admin/my-tickets/export', [MyTicketsController::class, 'export'])->name('admin.my-tickets.export');
+    Route::get('/admin/events', [TicketEventController::class, 'index'])->name('admin.events.index');
+    Route::get('/admin/events/data', [TicketEventController::class, 'data'])->name('admin.events.data');
 
     // Redirect legacy route to current Tickets V2 index
     Route::redirect('/all-tickets', '/admin/tickets-v2')->name('tickets.all');
@@ -94,11 +97,15 @@ Route::middleware('auth')->group(function () {
         Route::post('/bulk-assign', [TicketV2Controller::class, 'bulkAssign'])->name('tickets-v2.bulk-assign');
         Route::post('/bulk-close', [TicketV2Controller::class, 'bulkClose'])->name('tickets-v2.bulk-close');
         Route::post('/bulk-delete', [TicketV2Controller::class, 'bulkDelete'])->name('tickets-v2.bulk-delete');
+        Route::post('/bulk-restore', [TicketV2Controller::class, 'bulkRestore'])->name('tickets-v2.bulk-restore');
+        Route::post('/bulk-force-delete', [TicketV2Controller::class, 'bulkForceDelete'])->name('tickets-v2.bulk-force-delete');
+        Route::post('/empty-trash', [TicketV2Controller::class, 'emptyTrash'])->name('tickets-v2.empty-trash');
+        Route::post('/{id}/restore', [TicketV2Controller::class, 'restore'])->name('tickets-v2.restore');
+        Route::delete('/{id}/force', [TicketV2Controller::class, 'forceDelete'])->name('tickets-v2.force-delete');
         Route::get('/create', [TicketV2Controller::class, 'create'])->name('tickets-v2.create');
         Route::post('/', [TicketV2Controller::class, 'store'])->name('tickets-v2.store');
+        Route::delete('/{id}', [TicketV2Controller::class, 'destroy'])->name('tickets-v2.destroy');
     });
-
-    Route::delete('/admin/tickets-v2/{id}', [TicketV2Controller::class, 'destroy'])->name('tickets-v2.destroy');
 
     Route::get('/ratings/pending', [\App\Http\Controllers\RatingsController::class, 'pending'])->name('ratings.pending');
     Route::get('/ratings/dashboard', [RatingReportsController::class, 'index'])->name('ratings.dashboard');
@@ -116,6 +123,11 @@ Route::middleware('auth')->group(function () {
         Route::patch('/{user}/toggle-status', [UserController::class, 'toggleStatus'])->name('toggle-status');
         Route::delete('/{user}', [UserController::class, 'destroy'])->name('destroy');
     });
+
+    Route::get('/admin/settings/notification-sound', [\App\Http\Controllers\Admin\NotificationSoundController::class, 'show'])
+        ->name('admin.settings.sound.show');
+    Route::put('/admin/settings/notification-sound', [\App\Http\Controllers\Admin\NotificationSoundController::class, 'update'])
+        ->name('admin.settings.sound.update');
 });
 
 Route::get('/ticket-classifications', fn () => response()->json(\App\Support\TicketClassification::all()))->name('ticket.classifications');

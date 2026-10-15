@@ -8,6 +8,7 @@ use App\Models\TicketAttachmentDetail;
 use App\Models\TicketClientDetail;
 use App\Models\TicketDetail;
 use App\Models\TicketEmployee;
+use App\Services\TicketNotificationService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -109,6 +110,8 @@ class ClientController extends Controller
                 }
             }
 
+            app(TicketNotificationService::class)->sendTicketCreatedNotification($ref);
+
             return back()->with('success', 'Ticket created')->with('refNo', $ref);
         }
 
@@ -179,6 +182,8 @@ class ClientController extends Controller
                 ]);
             }
         }
+
+        app(TicketNotificationService::class)->sendTicketCreatedNotification($ref);
 
         return back()->with('success', 'Ticket created')->with('refNo', $ref);
 

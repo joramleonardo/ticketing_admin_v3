@@ -144,6 +144,7 @@ class MyTicketsController extends Controller
                             'event_end_date',
                             'event_venue',
                             'event_remarks',
+                            'other_request',
                             'created_at',
                             'updated_at',
                         ]);

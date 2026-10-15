@@ -18,6 +18,7 @@ class TicketEvent extends Model
         'event_end_date',
         'event_venue',
         'event_remarks',
+        'other_request',
     ];
 
     // format directly for <input type="date">

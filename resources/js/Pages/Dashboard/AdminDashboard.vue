@@ -115,6 +115,14 @@ function submitDispatch() {
 
 function formatTicketForModal(raw) {
   if (!raw) return null
+  const eventData = raw.event || raw.detail?.event || (raw.event_start_date ? {
+    event_start_date: raw.event_start_date,
+    event_end_date: raw.event_end_date,
+    event_venue: raw.event_venue,
+    event_remarks: raw.event_remarks,
+    other_request: raw.other_request,
+  } : null)
+
   return {
     client_id: raw.client_id,
     client_referenceNo: raw.client_referenceNo,
@@ -123,6 +131,7 @@ function formatTicketForModal(raw) {
     client_email: raw.client_email,
     date_requested: raw.date_requested,
     created_at: raw.created_at,
+    event: eventData,
     detail: {
       ticket_id: raw.ticket_id,
       ticket_type: raw.ticket_type,
@@ -133,6 +142,7 @@ function formatTicketForModal(raw) {
       ticket_status: raw.ticket_status,
       date_requested: raw.date_requested,
       created_at: raw.created_at,
+      event: eventData,
     },
   }
 }

@@ -6,7 +6,8 @@ import UserDropdown from '@/Components/Dropdowns/UserDropdown.vue'
 import FooterAdmin from '@/Components/Footers/FooterAdmin.vue'
 
 import { useToast } from 'vue-toastification'
-import { isSoundEnabled, setSoundEnabled, playNewTicketChime } from '@/Utils/soundAlert'
+import { isSoundEnabled, setSoundEnabled, playNewTicketChime, syncSoundSettings } from '@/Utils/soundAlert'
+import ModalNotificationSoundSettings from '@/Components/ModalNotificationSoundSettings.vue'
 
 const props = defineProps({
   ticketStats: Object,
@@ -20,6 +21,7 @@ const page = usePage()
 const toast = useToast()
 const isDrawerOpen = ref(false)
 const soundAlertsActive = ref(isSoundEnabled())
+const showSoundSettingsModal = ref(false)
 
 // ── Global Navbar Ticket Search ───────────────────────────────────────────────
 const globalSearchInputRef = ref(null)
@@ -252,6 +254,9 @@ function handleKeydown(e) {
 let removeNavListener = null
 
 onMounted(() => {
+  if (page.props?.notificationSound) {
+    syncSoundSettings(page.props.notificationSound)
+  }
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('tickets:sound-toggled', handleSoundToggled)
   document.addEventListener('mousedown', handleDocumentMousedown)
@@ -335,6 +340,7 @@ const currentBreadcrumb = computed(() => {
     if (userRole.value === 'Admin') return { section: 'Overview', title: 'Triage & Queue' }
     return { section: 'Overview', title: 'Personal Dashboard' }
   }
+  if (url.startsWith('/admin/events')) return { section: 'Events', title: 'Events Calendar & Monitoring' }
   if (url.startsWith('/admin/tickets-v2') || url.startsWith('/tickets-v2') || url.startsWith('/all-tickets')) {
     return { section: 'Tickets', title: 'All Tickets' }
   }
@@ -387,6 +393,14 @@ const navTabs = computed(() => {
         icon: 'tickets',
       },
       {
+        name: 'Events',
+        label: 'Events Calendar',
+        route: 'admin.events.index',
+        href: route('admin.events.index'),
+        active: route().current('admin.events.*') || page.url.startsWith('/admin/events'),
+        icon: 'calendar',
+      },
+      {
         name: 'Customer Ratings',
         label: 'Customer Ratings',
         route: 'ratings.dashboard',
@@ -424,6 +438,14 @@ const navTabs = computed(() => {
         badge: badges.unassigned > 0 ? `${badges.unassigned} New` : null,
         badgeVariant: 'danger',
         badgeTooltip: `${badges.unassigned} unassigned tickets awaiting dispatch`,
+      },
+      {
+        name: 'Events',
+        label: 'Events Calendar',
+        route: 'admin.events.index',
+        href: route('admin.events.index'),
+        active: route().current('admin.events.*') || page.url.startsWith('/admin/events'),
+        icon: 'calendar',
       },
       {
         name: 'Dashboard',
@@ -505,6 +527,14 @@ const navTabs = computed(() => {
       badge: badges.unassigned > 0 ? `${badges.unassigned}` : null,
       badgeVariant: 'danger',
       badgeTooltip: `${badges.unassigned} unassigned tickets awaiting dispatch`,
+    },
+    {
+      name: 'Events',
+      label: 'Events Calendar',
+      route: 'admin.events.index',
+      href: route('admin.events.index'),
+      active: route().current('admin.events.*') || page.url.startsWith('/admin/events'),
+      icon: 'calendar',
     },
     {
       name: 'Customer Ratings',
@@ -710,20 +740,30 @@ const navTabs = computed(() => {
         <!-- Right: Actions & User Profile -->
         <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
           <!-- Quick Action: Sound Alert Toggle for Staff -->
-          <button
-            v-if="userRole === 'Staff'"
-            type="button"
-            @click="toggleSoundAlerts"
-            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition shadow-2xs cursor-pointer shrink-0"
-            :class="soundAlertsActive
-              ? 'border-emerald-600 bg-emerald-950/80 text-emerald-200 hover:bg-emerald-900/90'
-              : 'border-blue-900/70 bg-blue-950/80 text-blue-300/60 hover:text-blue-200 hover:bg-blue-900/40'"
-            :title="soundAlertsActive ? 'Sound notifications active (Click to mute)' : 'Sound notifications muted (Click to unmute)'"
-            aria-label="Toggle Sound Notifications"
-          >
-            <i :class="soundAlertsActive ? 'fa-solid fa-volume-high text-emerald-400' : 'fa-solid fa-volume-xmark text-slate-400'"></i>
-            <span class="hidden md:inline">{{ soundAlertsActive ? 'Chime On' : 'Muted' }}</span>
-          </button>
+          <div v-if="userRole === 'Staff'" class="inline-flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              @click="toggleSoundAlerts"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition shadow-2xs cursor-pointer shrink-0"
+              :class="soundAlertsActive
+                ? 'border-emerald-600 bg-emerald-950/80 text-emerald-200 hover:bg-emerald-900/90'
+                : 'border-blue-900/70 bg-blue-950/80 text-blue-300/60 hover:text-blue-200 hover:bg-blue-900/40'"
+              :title="soundAlertsActive ? 'Sound notifications active (Click to mute)' : 'Sound notifications muted (Click to unmute)'"
+              aria-label="Toggle Sound Notifications"
+            >
+              <i :class="soundAlertsActive ? 'fa-solid fa-volume-high text-emerald-400' : 'fa-solid fa-volume-xmark text-slate-400'"></i>
+              <span class="hidden md:inline">{{ soundAlertsActive ? 'Chime On' : 'Muted' }}</span>
+            </button>
+            <button
+              type="button"
+              @click="showSoundSettingsModal = true"
+              class="p-1.5 text-xs font-semibold rounded-lg border border-blue-900/70 bg-blue-950/80 text-blue-300/80 hover:text-white hover:bg-blue-900/60 transition shadow-2xs cursor-pointer shrink-0"
+              title="Notification Sound & Ringtone Settings"
+              aria-label="Sound Settings"
+            >
+              <i class="fa-solid fa-gear text-xs"></i>
+            </button>
+          </div>
 
           <!-- Public Client Tracker Portal Link -->
           <a
@@ -767,6 +807,11 @@ const navTabs = computed(() => {
                 <!-- Tickets Icon -->
                 <svg v-else-if="tab.icon === 'tickets'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z" />
+                </svg>
+
+                <!-- Calendar (Events) Icon -->
+                <svg v-else-if="tab.icon === 'calendar'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
 
                 <!-- My Tickets (User) Icon -->
@@ -847,6 +892,17 @@ const navTabs = computed(() => {
                 <i :class="soundAlertsActive ? 'fa-solid fa-volume-high text-blue-400' : 'fa-solid fa-volume-xmark text-slate-400'"></i>
                 <span class="hidden md:inline">{{ soundAlertsActive ? 'Sound On' : 'Muted' }}</span>
               </button>
+
+              <!-- Sound Ringtone Settings Button -->
+              <button
+                type="button"
+                @click="showSoundSettingsModal = true"
+                class="inline-flex items-center justify-center p-1.5 text-xs font-semibold rounded-lg border border-blue-800 bg-blue-900/60 text-blue-200 hover:text-white hover:bg-blue-800 transition shadow-2xs cursor-pointer"
+                title="Notification Ringtone & Sound Settings"
+                aria-label="Sound Settings"
+              >
+                <i class="fa-solid fa-gear text-xs"></i>
+              </button>
             </div>
           </div>
         </div>
@@ -916,6 +972,7 @@ const navTabs = computed(() => {
                 <span :class="item.active ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-neutral-500'">
                   <svg v-if="item.icon === 'dashboard'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
                   <svg v-else-if="item.icon === 'tickets'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z" /></svg>
+                  <svg v-else-if="item.icon === 'calendar'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                   <svg v-else-if="item.icon === 'user'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                   <svg v-else-if="item.icon === 'star'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
                   <svg v-else-if="item.icon === 'report'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
@@ -997,7 +1054,13 @@ const navTabs = computed(() => {
       <slot />
     </main>
 
-    <!-- ── 5. FOOTER ───────────────────────────────────────────────────────── -->
+    <!-- ── 5. SOUND NOTIFICATION SETTINGS MODAL ──────────────────────────── -->
+    <ModalNotificationSoundSettings
+      :show="showSoundSettingsModal"
+      @close="showSoundSettingsModal = false"
+    />
+
+    <!-- ── 6. FOOTER ───────────────────────────────────────────────────────── -->
     <FooterAdmin />
   </div>
 </template>

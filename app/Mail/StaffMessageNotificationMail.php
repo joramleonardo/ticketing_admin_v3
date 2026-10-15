@@ -2,14 +2,16 @@
 
 namespace App\Mail;
 
+use App\Mail\Concerns\ThreadsTicketEmail;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Headers;
 use Illuminate\Queue\SerializesModels;
 
 class StaffMessageNotificationMail extends Mailable implements ShouldQueue
 {
-    use Queueable, SerializesModels;
+    use Queueable, SerializesModels, ThreadsTicketEmail;
 
     public function __construct(
         public string $refNo,
@@ -20,9 +22,14 @@ class StaffMessageNotificationMail extends Mailable implements ShouldQueue
         public ?string $problem = null,
     ) {}
 
+    public function headers(): Headers
+    {
+        return $this->threadHeaders(isRoot: false);
+    }
+
     public function build(): self
     {
-        return $this->subject("[Ticket #{$this->refNo}] New Message from IT Support")
+        return $this->subject($this->buildThreadSubject(null, $this->problem, isReply: true))
             ->markdown('email.tickets.staff_message');
     }
 }

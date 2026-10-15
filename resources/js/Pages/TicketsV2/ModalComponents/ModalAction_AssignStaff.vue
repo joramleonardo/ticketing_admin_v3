@@ -41,6 +41,7 @@
     const eventEndDate   = ref('') // YYYY-MM-DD (optional)
     const eventVenue = ref('')
     const eventRemarks = ref('')
+    const otherRequest = ref('')
 
     const filteredStaff = computed(() => {
         const q = (staffSearch.value || '').toLowerCase().trim()
@@ -77,6 +78,7 @@
         eventEndDate.value = ''
         eventVenue.value = ''
         eventRemarks.value = ''
+        otherRequest.value = ''
     }
 
     function close() {
@@ -92,10 +94,13 @@
             selectedStaff.value = ''
             staffSearch.value = ''
             errorMsg.value = ''
-            eventStartDate.value = ''
-            eventEndDate.value = ''
-            eventVenue.value = ''
-            eventRemarks.value = ''
+
+            const ev = props.ticket?.event || props.ticket?.detail?.event || props.ticket?.events || props.ticket?.detail?.events || {}
+            eventStartDate.value = ev.event_start_date || ev.startDate || ''
+            eventEndDate.value = ev.event_end_date || ev.endDate || ''
+            eventVenue.value = ev.event_venue || ev.venue || ''
+            eventRemarks.value = ev.event_remarks || ev.remarks || ''
+            otherRequest.value = ev.other_request || ev.otherRequest || ''
         },
         { immediate: false }
     )
@@ -107,6 +112,7 @@
             eventEndDate.value = ''
             eventVenue.value = ''
             eventRemarks.value = ''
+            otherRequest.value = ''
         }
     })
 
@@ -147,6 +153,7 @@
                     ? (eventVenue.value?.trim() || null)
                     : null,
             event_remarks:    selectedSupportType.value === 'Events' ? (eventRemarks.value?.trim() || null) : null,
+            other_request:    selectedSupportType.value === 'Events' ? (otherRequest.value?.trim() || null) : null,
         }
 
         submitting.value = true
@@ -276,9 +283,19 @@
             <label class="block font-semibold mb-1 text-gray-700">Remarks (optional)</label>
             <textarea
               v-model="eventRemarks"
-              rows="3"
+              rows="2"
               class="w-full border rounded px-3 py-2 text-sm focus:ring focus:ring-blue-200"
               placeholder="Special instructions, program notes, coverage scope, etc."
+            ></textarea>
+          </div>
+
+          <div class="mb-2">
+            <label class="block font-semibold mb-1 text-gray-700">Other Request (optional)</label>
+            <textarea
+              v-model="otherRequest"
+              rows="2"
+              class="w-full border rounded px-3 py-2 text-sm focus:ring focus:ring-blue-200"
+              placeholder="Equipment, microphones, projectors, cables, etc."
             ></textarea>
           </div>
         </div>

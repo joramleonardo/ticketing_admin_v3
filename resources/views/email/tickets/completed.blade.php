@@ -1,20 +1,63 @@
 @component('mail::message')
-# Ticket Completed
+# Your Support Request Has Been Completed
 
-Hi {{ $clientName }},
+Hi **{{ $clientName }}**,
 
-Your support ticket has been **completed**.
+Good news! Your support ticket has been marked as **Completed** by **{{ $staffName }}** from the DOST-STII IT Unit.
 
-**Reference No:** `{{ $refNo }}`
+@component('mail::panel')
+**TICKET SUMMARY**
 
-**Problem:** `{{ $problem }}`
+**Reference Number:** {{ $refNo }}
 
-@php($ratingUrl = 'http://ticketing.stii.local/client/rate/' . rawurlencode($refNo))
-@component('mail::button', ['url' => $ratingUrl])
-Rate this Ticket
+**Status:** Completed
+
+@if (!empty($ticketType))
+**Request Type:** {{ $ticketType }}
+@endif
+
+**Attended By:** {{ $staffName }}
+
+@if (!empty($dateCompleted))
+**Date Completed:** {{ $dateCompleted }}
+@endif
 @endcomponent
 
-If you have follow-up concerns, just reply to this email.
+@if (!empty($actionsTaken))
+## Actions Taken / Resolution
 
-Thanks, IT Unit
+{{ $actionsTaken }}
+
+---
+@endif
+
+@if (!empty($problem))
+## Concern Reported
+
+{{ $problem }}
+
+---
+@endif
+
+## How Was Our Service?
+
+Your feedback helps us continuously improve our IT support services. Please take a moment to rate the service you received for this ticket.
+
+@component('mail::button', ['url' => $rateUrl, 'color' => 'green'])
+Rate This Ticket
+@endcomponent
+
+@if (!empty($trackUrl))
+You can also view the complete activity logs and ticket history anytime on the [Ticket Tracking Portal]({{ $trackUrl }}).
+@endif
+
+Thank you for allowing us to serve you.
+
+Best regards,  
+**DOST-STII IT Support Desk**
+
+@component('mail::subcopy')
+If you're having trouble clicking the "Rate This Ticket" button, copy and paste the following URL into your web browser:  
+[{{ $rateUrl }}]({{ $rateUrl }})
+@endcomponent
 @endcomponent

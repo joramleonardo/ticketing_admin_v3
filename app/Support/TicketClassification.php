@@ -50,6 +50,7 @@ class TicketClassification
             'Network related',
             'PC Setup & Troubleshooting',
             'Printer related',
+            'Server Related',
             'STARBOOKS related',
             'Website and System related',
             'Events related',

@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TicketStatus;
-use App\Mail\StaffMessageNotificationMail;
 use App\Mail\TicketAssignedStaffNotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
@@ -16,6 +15,7 @@ use App\Models\TicketMessage;
 use App\Models\TicketRatingDetail;
 use App\Models\User;
 use App\Services\StaffService;
+use App\Services\TicketNotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -43,13 +43,18 @@ class TicketV2Controller extends Controller
     {
         $perPage = (int) $request->input('perPage', 10);
         $search = trim((string) $request->input('search', ''));
-        $status = $request->input('status'); // New | Pending | In Progress | Completed | Cancelled | Closed | null
-        $allowedStatuses = TicketStatus::values();
-        if (! in_array($status, $allowedStatuses, true)) {
-            $status = null;
+        $rawStatus = $request->input('status'); // New | Pending | In Progress | Completed | Cancelled | Closed | Trash | null
+        $preset = trim((string) $request->input('preset', '')); // "assigned_to_me", "overdue", "awaiting_rating", "unassigned", "trash"
+        $isTrash = ($rawStatus === 'Trash' || $preset === 'trash');
+
+        $status = null;
+        if ($isTrash) {
+            $status = 'Trash';
+        } elseif (in_array($rawStatus, TicketStatus::values(), true)) {
+            $status = $rawStatus;
         }
+
         $division = trim((string) $request->input('division', '')); // "1","2","3","4","FAD","OTHERS",""
-        $preset = trim((string) $request->input('preset', '')); // "assigned_to_me", "overdue", "awaiting_rating", "unassigned"
         $assignedStaff = trim((string) $request->input('assigned_staff', ''));
         $currentUserName = Auth::user()?->name;
 
@@ -124,7 +129,7 @@ class TicketV2Controller extends Controller
         // -----------------------------
         // Listing query
         // -----------------------------
-        $query = TicketClientDetail::query()
+        $query = ($isTrash ? TicketClientDetail::onlyTrashed() : TicketClientDetail::query())
             ->select([
                 'client_id',
                 'client_referenceNo',
@@ -137,7 +142,7 @@ class TicketV2Controller extends Controller
             ->with([
                 'latestMessage',
                 'detail' => function ($q) {
-                    $q->select([
+                    $q->withTrashed()->select([
                         'ticket_id',
                         'client_referenceNo',
                         'ticket_type',
@@ -154,12 +159,23 @@ class TicketV2Controller extends Controller
                         'date_requested',
                         'date_completed',
                         'created_at',
-                    ]);
+                    ])->with(['event' => function ($e) {
+                        $e->select([
+                            'event_id',
+                            'client_referenceNo',
+                            'event_start_date',
+                            'event_end_date',
+                            'event_venue',
+                            'event_remarks',
+                            'other_request',
+                        ]);
+                    }]);
                 },
+                'event',
             ])
 
-            // fast status filter
-            ->when($status, function ($q) use ($status) {
+            // fast status filter (only when status is an actual ticket status, not Trash)
+            ->when($status && $status !== 'Trash', function ($q) use ($status) {
                 $q->whereHas('detail', fn ($d) => $d->where('ticket_status', $status));
             })
 
@@ -255,14 +271,14 @@ class TicketV2Controller extends Controller
             $query->orderBy('client_division_agency', $direction);
         } elseif ($sort === 'date_requested') {
             $query->orderBy(
-                TicketDetail::select('date_requested')
+                TicketDetail::withTrashed()->select('date_requested')
                     ->whereColumn('v2_ticket_details.client_referenceNo', 'v2_ticket_client_details.client_referenceNo')
                     ->limit(1),
                 $direction
             );
         } elseif ($sort === 'ticket_status') {
             $query->orderBy(
-                TicketDetail::select('ticket_status')
+                TicketDetail::withTrashed()->select('ticket_status')
                     ->whereColumn('v2_ticket_details.client_referenceNo', 'v2_ticket_client_details.client_referenceNo')
                     ->limit(1),
                 $direction
@@ -331,6 +347,13 @@ class TicketV2Controller extends Controller
             // Dates
             'date_requested' => 'required|date',
             'date_completed' => 'nullable|date|after_or_equal:date_requested',
+
+            // Events
+            'event_start_date' => 'nullable|date',
+            'event_end_date' => 'nullable|date',
+            'event_venue' => 'nullable|string|max:255',
+            'event_remarks' => 'nullable|string',
+            'other_request' => 'nullable|string',
         ], [
             'date_completed.after_or_equal' => 'The completion date cannot be earlier than the request date.',
         ]);
@@ -383,6 +406,21 @@ class TicketV2Controller extends Controller
         ) {
             $ref = $this->generateReferenceForDate($dateRequested);
 
+            $isEvents = ($validated['ticket_type'] === 'Events'
+                || $validated['ticket_nature_of_support'] === 'Events'
+                || $request->filled('event_start_date'));
+
+            $problem = $request->input('ticket_problem_that_needed_support');
+            if (empty(trim((string) $problem))) {
+                if ($isEvents) {
+                    $problem = $request->input('other_request')
+                        ?: ($request->input('event_remarks')
+                            ?: 'Event Support: '.($request->input('event_venue') ?: 'Event'));
+                } else {
+                    $problem = 'No description provided';
+                }
+            }
+
             TicketClientDetail::create([
                 'client_referenceNo' => $ref,
                 'client_type' => $validated['client_type'],
@@ -401,13 +439,24 @@ class TicketV2Controller extends Controller
                 'ticket_assigned_staff' => $attendedBy,
                 'ticket_attended_by' => $attendedBy,
                 'ticket_assisted_by' => $assistedBy,
-                'ticket_problem_that_needed_support' => $request->input('ticket_problem_that_needed_support'),
+                'ticket_problem_that_needed_support' => $problem,
                 'ticket_actions_taken' => $actionsTaken,
                 'ticket_remarks' => $request->input('ticket_remarks') ?? '',
                 'ticket_status' => 'Completed',
                 'date_requested' => $dateRequested,
                 'date_completed' => $dateCompleted,
             ]);
+
+            if ($isEvents) {
+                TicketEvent::create([
+                    'client_referenceNo' => $ref,
+                    'event_start_date' => $request->input('event_start_date') ?: Carbon::parse($dateRequested)->toDateString(),
+                    'event_end_date' => $request->input('event_end_date') ?: null,
+                    'event_venue' => $request->input('event_venue') ?: 'DOST-STII',
+                    'event_remarks' => $request->input('event_remarks') ?: null,
+                    'other_request' => $request->input('other_request') ?: null,
+                ]);
+            }
 
             $logs = [
                 [
@@ -532,10 +581,12 @@ class TicketV2Controller extends Controller
         }
 
         return DB::transaction(function () use ($identifiers): int {
-            // 1. Locate all matching client ticket records
-            $tickets = TicketClientDetail::query()
-                ->whereIn('client_id', $identifiers)
-                ->orWhereIn('client_referenceNo', $identifiers)
+            // 1. Locate all matching client ticket records (including soft-deleted)
+            $tickets = TicketClientDetail::withTrashed()
+                ->where(function ($q) use ($identifiers) {
+                    $q->whereIn('client_id', $identifiers)
+                        ->orWhereIn('client_referenceNo', $identifiers);
+                })
                 ->get();
 
             // Collect all reference numbers and client IDs
@@ -543,9 +594,11 @@ class TicketV2Controller extends Controller
             $clientIds = $tickets->pluck('client_id')->filter()->unique()->values()->all();
 
             // Also check for any reference in ticket details if not found in client details
-            $extraDetails = TicketDetail::query()
-                ->whereIn('ticket_id', $identifiers)
-                ->orWhereIn('client_referenceNo', $identifiers)
+            $extraDetails = TicketDetail::withTrashed()
+                ->where(function ($q) use ($identifiers) {
+                    $q->whereIn('ticket_id', $identifiers)
+                        ->orWhereIn('client_referenceNo', $identifiers);
+                })
                 ->get(['client_referenceNo', 'ticket_id']);
 
             foreach ($extraDetails as $ed) {
@@ -593,8 +646,8 @@ class TicketV2Controller extends Controller
             // 6. Delete rating details (v2_ticket_rating_details)
             TicketRatingDetail::whereIn('client_referenceNo', $refs)->delete();
 
-            // 7. Delete technical ticket details (v2_ticket_details)
-            TicketDetail::query()
+            // 7. Permanently delete technical ticket details (v2_ticket_details)
+            TicketDetail::withTrashed()
                 ->where(function ($q) use ($refs, $clientIds) {
                     if (! empty($refs)) {
                         $q->whereIn('client_referenceNo', $refs);
@@ -603,10 +656,10 @@ class TicketV2Controller extends Controller
                         $q->orWhereIn('ticket_id', $clientIds);
                     }
                 })
-                ->delete();
+                ->forceDelete();
 
-            // 8. Delete parent client records (v2_ticket_client_details)
-            $deletedCount = TicketClientDetail::query()
+            // 8. Permanently delete parent client records (v2_ticket_client_details)
+            $deletedCount = TicketClientDetail::withTrashed()
                 ->where(function ($q) use ($refs, $clientIds) {
                     if (! empty($refs)) {
                         $q->whereIn('client_referenceNo', $refs);
@@ -615,38 +668,140 @@ class TicketV2Controller extends Controller
                         $q->orWhereIn('client_id', $clientIds);
                     }
                 })
-                ->delete();
+                ->forceDelete();
 
             return max($deletedCount, count($refs));
         });
     }
 
+    /**
+     * Move a ticket to trash (Soft Delete - Admin only).
+     */
     public function destroy($id)
     {
         if (! Auth::check() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
             abort(403, 'Only Admin can delete tickets.');
         }
 
-        $exists = TicketClientDetail::where('client_id', $id)
+        $client = TicketClientDetail::where('client_id', $id)
             ->orWhere('client_referenceNo', $id)
-            ->exists() || TicketDetail::where('ticket_id', $id)
-            ->orWhere('client_referenceNo', $id)
-            ->exists();
+            ->first();
 
-        if (! $exists) {
+        $detail = TicketDetail::where('ticket_id', $id)
+            ->orWhere('client_referenceNo', $id)
+            ->first();
+
+        if (! $client && ! $detail) {
             abort(404, 'Ticket not found.');
         }
 
-        $this->purgeTickets([$id]);
+        $ref = $client?->client_referenceNo ?? $detail?->client_referenceNo ?? (string) $id;
+
+        DB::transaction(function () use ($client, $detail, $ref) {
+            if ($client) {
+                $client->delete();
+            }
+            if ($detail) {
+                $detail->delete();
+            }
+
+            TicketActivityLog::create([
+                'client_referenceNo' => $ref,
+                'activity_name' => 'Ticket Moved to Trash',
+                'activity_date' => now(),
+                'activity_user' => Auth::user()?->name ?? 'Admin',
+            ]);
+        });
+
+        $message = "Ticket #{$ref} moved to trash successfully.";
 
         if (request()->wantsJson()) {
             return response()->json([
                 'success' => true,
-                'message' => 'Ticket and all related records including messages deleted successfully.',
+                'message' => $message,
             ]);
         }
 
-        return back()->with('success', 'Ticket and all related records including messages deleted successfully.');
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Restore a soft-deleted ticket from trash (Admin only).
+     */
+    public function restore($id)
+    {
+        if (! Auth::check() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
+            abort(403, 'Only Admin can restore tickets.');
+        }
+
+        $client = TicketClientDetail::onlyTrashed()
+            ->where(function ($q) use ($id) {
+                $q->where('client_id', $id)->orWhere('client_referenceNo', $id);
+            })
+            ->first();
+
+        $detail = TicketDetail::onlyTrashed()
+            ->where(function ($q) use ($id) {
+                $q->where('ticket_id', $id)->orWhere('client_referenceNo', $id);
+            })
+            ->first();
+
+        if (! $client && ! $detail) {
+            abort(404, 'Trashed ticket not found.');
+        }
+
+        $ref = $client?->client_referenceNo ?? $detail?->client_referenceNo ?? (string) $id;
+
+        DB::transaction(function () use ($client, $detail, $ref) {
+            if ($client) {
+                $client->restore();
+            }
+            if ($detail) {
+                $detail->restore();
+            }
+
+            TicketActivityLog::create([
+                'client_referenceNo' => $ref,
+                'activity_name' => 'Ticket Restored from Trash',
+                'activity_date' => now(),
+                'activity_user' => Auth::user()?->name ?? 'Admin',
+            ]);
+        });
+
+        $message = "Ticket #{$ref} restored from trash successfully.";
+
+        if (request()->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+            ]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Permanently delete a ticket and all its relations (Admin only).
+     */
+    public function forceDelete($id)
+    {
+        if (! Auth::check() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
+            abort(403, 'Only Admin can permanently delete tickets.');
+        }
+
+        $purgedCount = $this->purgeTickets([$id]);
+
+        $message = 'Ticket and all related records permanently deleted.';
+
+        if (request()->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'deleted_count' => $purgedCount,
+                'message' => $message,
+            ]);
+        }
+
+        return back()->with('success', $message);
     }
 
     public function myTickets(Request $request)
@@ -698,8 +853,18 @@ class TicketV2Controller extends Controller
                     'date_requested',
                     'date_completed',
                     'created_at',
-                ]);
-            }])
+                ])->with(['event' => function ($e) {
+                    $e->select([
+                        'event_id',
+                        'client_referenceNo',
+                        'event_start_date',
+                        'event_end_date',
+                        'event_venue',
+                        'event_remarks',
+                        'other_request',
+                    ]);
+                }]);
+            }, 'event'])
 
             // ✅ Only tickets assigned to logged-in user
             ->whereHas('detail', function ($q) {
@@ -790,56 +955,13 @@ class TicketV2Controller extends Controller
             'activity_user' => $staffName,
         ]);
 
-        // Look up client details for email notification
-        $client = DB::table('v2_ticket_client_details')
-            ->where('client_referenceNo', $ref)
-            ->first();
-
-        $clientEmail = trim((string) ($client?->client_email ?? ''));
-        $emailSent = false;
-
-        if ($clientEmail !== '' && filter_var($clientEmail, FILTER_VALIDATE_EMAIL)) {
-            $clientName = $client?->client_name ?? 'Client';
-            $problem = $ticket->ticket_problem_that_needed_support ?? null;
-
-            $clientAppUrl = config('app.client_url');
-            if (! $clientAppUrl) {
-                $host = request()->getHost();
-                if (str_contains($host, 'ticketing-admin.')) {
-                    $clientHost = str_replace('ticketing-admin.', 'ticketing.', $host);
-                    $scheme = request()->getScheme();
-                    $port = request()->getPort();
-                    $portStr = ($port && ! in_array($port, [80, 443])) ? ':'.$port : '';
-                    $clientAppUrl = "{$scheme}://{$clientHost}{$portStr}";
-                }
-            }
-            $baseUrl = $clientAppUrl ?: (request()->getHost() ? request()->getSchemeAndHttpHost() : config('app.url'));
-            $trackUrl = rtrim($baseUrl, '/').'/client?track='.rawurlencode($ref).'&open=1';
-
-            try {
-                $mailable = new StaffMessageNotificationMail(
-                    refNo: $ref,
-                    clientName: $clientName,
-                    staffName: $staffName,
-                    messageText: $validated['message'],
-                    trackUrl: $trackUrl,
-                    problem: $problem,
-                );
-
-                if (config('queue.default') === 'sync') {
-                    Mail::to($clientEmail)->send($mailable);
-                } else {
-                    Mail::to($clientEmail)->queue($mailable);
-                }
-                $emailSent = true;
-            } catch (\Throwable $e) {
-                Log::error('StaffMessageNotificationMail failed to send', [
-                    'ref' => $ref,
-                    'to' => $clientEmail,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
+        $notificationService = app(TicketNotificationService::class);
+        $clientEmail = $notificationService->resolveClientEmail(null, $ref);
+        $emailSent = $notificationService->sendTicketMessageNotification(
+            $ref,
+            $staffName,
+            $validated['message']
+        );
 
         return response()->json([
             'ok' => true,
@@ -1139,6 +1261,16 @@ class TicketV2Controller extends Controller
             ->orWhere('username', $staff)
             ->first();
 
+        // Notify client(s) about their assigned IT specialist
+        $notificationService = app(TicketNotificationService::class);
+        $resolvedStaffName = $staffUser?->name ?? $staff;
+        foreach ($assignedTickets as $assignedTicket) {
+            $notificationService->sendTicketAssignedClientNotification(
+                $assignedTicket['refNo'],
+                $resolvedStaffName
+            );
+        }
+
         $staffEmail = app(StaffService::class)->resolveStaffEmail($staff)
             ?? ($staffUser ? app(StaffService::class)->resolveStaffEmail($staffUser->name) : null);
         $staffEmail = trim((string) ($staffEmail ?? ''));
@@ -1256,7 +1388,7 @@ class TicketV2Controller extends Controller
     }
 
     /**
-     * Bulk delete tickets (Admin only).
+     * Bulk move tickets to trash (Soft Delete - Admin only).
      */
     public function bulkDelete(Request $request)
     {
@@ -1269,17 +1401,235 @@ class TicketV2Controller extends Controller
             'ticket_ids.*' => 'required',
         ]);
 
-        $deletedCount = $this->purgeTickets($validated['ticket_ids']);
+        $ids = $validated['ticket_ids'];
+        $actorName = Auth::user()?->name ?? 'Admin';
+
+        $affectedCount = DB::transaction(function () use ($ids, $actorName): int {
+            $clients = TicketClientDetail::query()
+                ->where(function ($q) use ($ids) {
+                    $q->whereIn('client_id', $ids)
+                        ->orWhereIn('client_referenceNo', $ids);
+                })
+                ->get();
+
+            $refs = $clients->pluck('client_referenceNo')->filter()->unique()->values()->all();
+
+            $details = TicketDetail::query()
+                ->where(function ($q) use ($ids) {
+                    $q->whereIn('ticket_id', $ids)
+                        ->orWhereIn('client_referenceNo', $ids);
+                })
+                ->get();
+
+            foreach ($details as $d) {
+                if ($d->client_referenceNo && ! in_array($d->client_referenceNo, $refs, true)) {
+                    $refs[] = $d->client_referenceNo;
+                }
+            }
+
+            foreach ($ids as $id) {
+                if (is_string($id) && ! in_array($id, $refs, true)) {
+                    $refs[] = $id;
+                }
+            }
+
+            TicketClientDetail::query()
+                ->where(function ($q) use ($ids, $refs) {
+                    $q->whereIn('client_id', $ids)
+                        ->orWhereIn('client_referenceNo', $refs);
+                })
+                ->delete();
+
+            TicketDetail::query()
+                ->where(function ($q) use ($ids, $refs) {
+                    $q->whereIn('ticket_id', $ids)
+                        ->orWhereIn('client_referenceNo', $refs);
+                })
+                ->delete();
+
+            $logs = [];
+            foreach ($refs as $ref) {
+                $logs[] = [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Moved to Trash',
+                    'activity_date' => now(),
+                    'activity_user' => $actorName,
+                ];
+            }
+            if (! empty($logs)) {
+                TicketActivityLog::insert($logs);
+            }
+
+            return max(count($refs), count($ids));
+        });
+
+        $message = "{$affectedCount} tickets moved to trash successfully.";
 
         if ($request->wantsJson()) {
             return response()->json([
                 'success' => true,
-                'deleted_count' => $deletedCount,
-                'message' => "{$deletedCount} tickets and all related records including messages deleted successfully.",
+                'deleted_count' => $affectedCount,
+                'message' => $message,
             ]);
         }
 
-        return back()->with('success', "{$deletedCount} tickets and all related records including messages deleted successfully.");
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Bulk restore tickets from trash (Admin only).
+     */
+    public function bulkRestore(Request $request)
+    {
+        if (! Auth::user() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
+            abort(403, 'Only Admin can restore tickets.');
+        }
+
+        $validated = $request->validate([
+            'ticket_ids' => 'required|array|min:1',
+            'ticket_ids.*' => 'required',
+        ]);
+
+        $ids = $validated['ticket_ids'];
+        $actorName = Auth::user()?->name ?? 'Admin';
+
+        $restoredCount = DB::transaction(function () use ($ids, $actorName): int {
+            $clients = TicketClientDetail::onlyTrashed()
+                ->where(function ($q) use ($ids) {
+                    $q->whereIn('client_id', $ids)
+                        ->orWhereIn('client_referenceNo', $ids);
+                })
+                ->get();
+
+            $refs = $clients->pluck('client_referenceNo')->filter()->unique()->values()->all();
+
+            $details = TicketDetail::onlyTrashed()
+                ->where(function ($q) use ($ids) {
+                    $q->whereIn('ticket_id', $ids)
+                        ->orWhereIn('client_referenceNo', $ids);
+                })
+                ->get();
+
+            foreach ($details as $d) {
+                if ($d->client_referenceNo && ! in_array($d->client_referenceNo, $refs, true)) {
+                    $refs[] = $d->client_referenceNo;
+                }
+            }
+
+            foreach ($ids as $id) {
+                if (is_string($id) && ! in_array($id, $refs, true)) {
+                    $refs[] = $id;
+                }
+            }
+
+            TicketClientDetail::onlyTrashed()
+                ->where(function ($q) use ($ids, $refs) {
+                    $q->whereIn('client_id', $ids)
+                        ->orWhereIn('client_referenceNo', $refs);
+                })
+                ->restore();
+
+            TicketDetail::onlyTrashed()
+                ->where(function ($q) use ($ids, $refs) {
+                    $q->whereIn('ticket_id', $ids)
+                        ->orWhereIn('client_referenceNo', $refs);
+                })
+                ->restore();
+
+            $logs = [];
+            foreach ($refs as $ref) {
+                $logs[] = [
+                    'client_referenceNo' => $ref,
+                    'activity_name' => 'Ticket Restored from Trash',
+                    'activity_date' => now(),
+                    'activity_user' => $actorName,
+                ];
+            }
+            if (! empty($logs)) {
+                TicketActivityLog::insert($logs);
+            }
+
+            return max(count($refs), count($ids));
+        });
+
+        $message = "{$restoredCount} tickets restored from trash successfully.";
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'restored_count' => $restoredCount,
+                'message' => $message,
+            ]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Bulk permanently delete tickets from trash (Admin only).
+     */
+    public function bulkForceDelete(Request $request)
+    {
+        if (! Auth::user() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
+            abort(403, 'Only Admin can permanently delete tickets.');
+        }
+
+        $validated = $request->validate([
+            'ticket_ids' => 'required|array|min:1',
+            'ticket_ids.*' => 'required',
+        ]);
+
+        $purgedCount = $this->purgeTickets($validated['ticket_ids']);
+
+        $message = "{$purgedCount} tickets permanently deleted.";
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'deleted_count' => $purgedCount,
+                'message' => $message,
+            ]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Empty entire trash bin (Admin only).
+     */
+    public function emptyTrash()
+    {
+        if (! Auth::user() || ! in_array(strtolower(trim((string) Auth::user()->role)), ['admin', 'super admin'], true)) {
+            abort(403, 'Only Admin can empty trash.');
+        }
+
+        $trashedClients = TicketClientDetail::onlyTrashed()->pluck('client_referenceNo')->filter()->all();
+        $trashedDetails = TicketDetail::onlyTrashed()->pluck('client_referenceNo')->filter()->all();
+        $trashedClientIds = TicketClientDetail::onlyTrashed()->pluck('client_id')->all();
+        $allRefs = array_values(array_unique(array_merge($trashedClients, $trashedDetails, $trashedClientIds)));
+
+        if (empty($allRefs)) {
+            $msg = 'Trash is already empty.';
+            if (request()->wantsJson()) {
+                return response()->json(['success' => true, 'deleted_count' => 0, 'message' => $msg]);
+            }
+
+            return back()->with('success', $msg);
+        }
+
+        $purgedCount = $this->purgeTickets($allRefs);
+
+        $message = "Trash emptied successfully. {$purgedCount} tickets permanently purged.";
+
+        if (request()->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'deleted_count' => $purgedCount,
+                'message' => $message,
+            ]);
+        }
+
+        return back()->with('success', $message);
     }
 
     /**
@@ -1391,9 +1741,11 @@ class TicketV2Controller extends Controller
         $clientTbl = (new TicketClientDetail)->getTable();
         $detailTbl = (new TicketDetail)->getTable();
 
-        $base = TicketClientDetail::query()
+        $base = TicketClientDetail::withTrashed()
             ->from($clientTbl.' as c')
             ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
+            ->whereNull('c.deleted_at')
+            ->whereNull('d.deleted_at')
             ->when($division !== '', function ($q) use ($division, $DIVISION_MAP, $KNOWN_DIVISIONS) {
                 if (strcasecmp($division, 'OTHERS') === 0) {
                     $q->where(function ($qq) use ($KNOWN_DIVISIONS) {
@@ -1557,6 +1909,7 @@ class TicketV2Controller extends Controller
             'Completed' => (int) ($countsRow->completed_count ?? 0),
             'Cancelled' => (int) ($countsRow->cancelled_count ?? 0),
             'Closed' => (int) ($countsRow->closed_count ?? 0),
+            'Trash' => (int) TicketClientDetail::onlyTrashed()->count(),
             'presets' => [
                 'assigned_to_me' => (int) ($countsRow->assigned_to_me_count ?? 0),
                 'overdue' => (int) ($countsRow->overdue_count ?? 0),
@@ -1593,9 +1946,11 @@ class TicketV2Controller extends Controller
             '4' => 'OD-MISPS',
         ];
 
-        $baseQuery = TicketClientDetail::query()
+        $baseQuery = TicketClientDetail::withTrashed()
             ->from($clientTbl.' as c')
             ->join($detailTbl.' as d', 'd.client_referenceNo', '=', 'c.client_referenceNo')
+            ->whereNull('c.deleted_at')
+            ->whereNull('d.deleted_at')
             ->where(function ($sub) use ($term) {
                 $sub->where('c.client_referenceNo', 'like', $term)
                     ->orWhere('c.client_name', 'like', $term)

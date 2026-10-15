@@ -519,12 +519,24 @@ it('allows admin to bulk delete tickets and all related records including messag
     ]);
     $respForbidden->assertForbidden();
 
-    // Admin should succeed
+    // Admin should succeed in moving tickets to trash (soft delete)
     $respAdmin = $this->actingAs($admin)->postJson('/admin/tickets-v2/bulk-delete', [
         'ticket_ids' => [$ref1, $ref2],
     ]);
     $respAdmin->assertSuccessful();
     expect($respAdmin->json('deleted_count'))->toBe(2);
+
+    // Records are soft-deleted: deleted_at is not null, child records preserved
+    expect(DB::table('v2_ticket_client_details')->whereIn('client_referenceNo', [$ref1, $ref2])->whereNotNull('deleted_at')->count())->toBe(2)
+        ->and(DB::table('v2_ticket_details')->whereIn('client_referenceNo', [$ref1, $ref2])->whereNotNull('deleted_at')->count())->toBe(2)
+        ->and(DB::table('v2_ticket_messages')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(2);
+
+    // Admin can permanently purge tickets via bulk force delete
+    $respForce = $this->actingAs($admin)->postJson('/admin/tickets-v2/bulk-force-delete', [
+        'ticket_ids' => [$ref1, $ref2],
+    ]);
+    $respForce->assertSuccessful();
+    expect($respForce->json('deleted_count'))->toBe(2);
 
     expect(DB::table('v2_ticket_client_details')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
         ->and(DB::table('v2_ticket_details')->whereIn('client_referenceNo', [$ref1, $ref2])->count())->toBe(0)
@@ -776,8 +788,18 @@ it('allows Super Admin and Admin to delete a single ticket and all related recor
         'rating_result' => 'Excellent',
     ]);
 
+    // Deleting via DELETE /admin/tickets-v2/{id} moves ticket to trash (soft delete)
     $response = $this->actingAs($admin)->deleteJson("/admin/tickets-v2/{$clientId}");
     $response->assertSuccessful()
+        ->assertJsonPath('success', true);
+
+    expect(DB::table('v2_ticket_client_details')->where('client_id', $clientId)->whereNotNull('deleted_at')->exists())->toBeTrue()
+        ->and(DB::table('v2_ticket_details')->where('client_referenceNo', $ref)->whereNotNull('deleted_at')->exists())->toBeTrue()
+        ->and(DB::table('v2_ticket_messages')->where('client_referenceNo', $ref)->exists())->toBeTrue();
+
+    // Force deleting permanently purges all records
+    $forceResp = $this->actingAs($admin)->deleteJson("/admin/tickets-v2/{$clientId}/force");
+    $forceResp->assertSuccessful()
         ->assertJsonPath('success', true);
 
     expect(DB::table('v2_ticket_client_details')->where('client_id', $clientId)->exists())->toBeFalse()

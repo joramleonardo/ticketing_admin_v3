@@ -1,9 +1,10 @@
 <script setup>
 import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { router, usePage } from '@inertiajs/vue3'
+import { Link, router, usePage } from '@inertiajs/vue3'
 import Modal from '@/Components/Modal.vue'
 import ModalAction_CreateTicket from '@/Pages/TicketsV2/ModalComponents/ModalAction_CreateTicket.vue'
 import ModalTicketDetails from '@/Pages/TicketsV2/ModalComponents/ModalTicketDetails.vue'
+import ModalNotificationSoundSettings from '@/Components/ModalNotificationSoundSettings.vue'
 import TicketMessageThread from '@/Components/TicketMessageThread.vue'
 import { useToast } from 'vue-toastification'
 import { useStaffList } from '@/Composables/useStaffList'
@@ -88,6 +89,7 @@ function onCustomDateChange() {
 
 // ── Real-Time Dispatch Mode & Audio Alert Monitoring ──────────────────────────
 const soundAlertsActive = ref(isSoundEnabled())
+const showSoundSettingsModal = ref(false)
 const isDispatchLive = ref(true)
 const isCheckingUpdates = ref(false)
 const maxTicketId = ref(0)
@@ -872,7 +874,7 @@ const vClickOutside = {
 }
 
 // ── Quick Status Chips / Tabs ─────────────────────────────────────────────────
-const TABS = ['All', 'New', 'Pending', 'In Progress', 'Completed', 'Closed']
+const TABS = ['All', 'New', 'Pending', 'In Progress', 'Completed', 'Closed', 'Trash']
 const isActiveTab = (label) => {
   if (presetFilter.value) return false
   return (statusFilter.value || 'All') === label
@@ -891,7 +893,10 @@ const statusTabsConfig = computed(() => [
   { value: 'In Progress', label: 'In Progress', count: counts.value?.['In Progress'] ?? 0, icon: 'fa-solid fa-gears' },
   { value: 'Completed', label: 'Completed', count: counts.value?.Completed ?? 0, icon: 'fa-solid fa-circle-check' },
   { value: 'Closed', label: 'Closed', count: counts.value?.Closed ?? 0, icon: 'fa-solid fa-lock' },
+  { value: 'Trash', label: 'Trash', count: counts.value?.Trash ?? 0, icon: 'fa-solid fa-trash-can' },
 ])
+
+const isTrashView = computed(() => statusFilter.value === 'Trash')
 
 // ── Status & SLA Column Differentiation Helpers ──────────────────────────────
 function getSlaTagClass(ticket) {
@@ -1066,7 +1071,7 @@ function closeDetailsModal() {
   modalInitialAction.value = null
 }
 
-// Single Ticket Delete Modal
+// Single Ticket Delete (Move to Trash) Modal
 const showSingleDeleteModal = ref(false)
 const ticketToDelete = ref(null)
 const isSingleDeleting = ref(false)
@@ -1110,7 +1115,7 @@ function submitSingleDelete() {
   router.delete(`/admin/tickets-v2/${encodeURIComponent(id)}`, {
     preserveScroll: true,
     onSuccess: () => {
-      toast.success(`Ticket ${refNo} deleted successfully!`)
+      toast.success(`Ticket ${refNo} moved to trash successfully!`)
       if (showDetailsModal.value && selectedRow.value?.client_referenceNo === t.client_referenceNo) {
         closeDetailsModal()
       }
@@ -1118,10 +1123,96 @@ function submitSingleDelete() {
       fetchTickets(pagination.value.current_page ?? 1)
     },
     onError: (err) => {
-      toast.error(err?.message || 'Failed to delete ticket.')
+      toast.error(err?.message || 'Failed to move ticket to trash.')
     },
     onFinish: () => {
       isSingleDeleting.value = false
+    },
+  })
+}
+
+// Single Ticket Restore from Trash
+const isRestoring = ref(false)
+function restoreTicket(ticket) {
+  if (!ticket || isRestoring.value) return
+  const id = ticket.client_id ?? ticket.id ?? ticket.client_referenceNo
+  const refNo = ticket.client_referenceNo || `#${id}`
+
+  isRestoring.value = true
+  router.post(`/admin/tickets-v2/${encodeURIComponent(id)}/restore`, {}, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`Ticket ${refNo} restored successfully!`)
+      if (showDetailsModal.value && selectedRow.value?.client_referenceNo === ticket.client_referenceNo) {
+        closeDetailsModal()
+      }
+      fetchTickets(pagination.value.current_page ?? 1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Failed to restore ticket.')
+    },
+    onFinish: () => {
+      isRestoring.value = false
+    },
+  })
+}
+
+// Single Ticket Permanent Force Delete Modal
+const showSingleForceDeleteModal = ref(false)
+const ticketToForceDelete = ref(null)
+const isSingleForceDeleting = ref(false)
+const singleForceDeleteTypedRef = ref('')
+const singleForceDeleteInputRef = ref(null)
+
+const expectedForceDeleteRef = computed(() =>
+  String(
+    ticketToForceDelete.value?.client_referenceNo ||
+    ticketToForceDelete.value?.detail?.client_referenceNo ||
+    ticketToForceDelete.value?.client_id ||
+    ''
+  ).trim()
+)
+
+const canConfirmSingleForceDelete = computed(
+  () => Boolean(expectedForceDeleteRef.value) && singleForceDeleteTypedRef.value.trim() === expectedForceDeleteRef.value
+)
+
+function openSingleForceDeleteModal(ticket) {
+  if (!ticket) return
+  ticketToForceDelete.value = ticket
+  singleForceDeleteTypedRef.value = ''
+  showSingleForceDeleteModal.value = true
+  nextTick(() => singleForceDeleteInputRef.value?.focus?.())
+}
+
+function closeSingleForceDeleteModal() {
+  showSingleForceDeleteModal.value = false
+  ticketToForceDelete.value = null
+  singleForceDeleteTypedRef.value = ''
+}
+
+function submitSingleForceDelete() {
+  if (!ticketToForceDelete.value || !canConfirmSingleForceDelete.value || isSingleForceDeleting.value) return
+  const t = ticketToForceDelete.value
+  const id = t.client_id ?? t.id ?? t.client_referenceNo
+  const refNo = t.client_referenceNo || `#${id}`
+
+  isSingleForceDeleting.value = true
+  router.delete(`/admin/tickets-v2/${encodeURIComponent(id)}/force`, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`Ticket ${refNo} permanently deleted!`)
+      if (showDetailsModal.value && selectedRow.value?.client_referenceNo === t.client_referenceNo) {
+        closeDetailsModal()
+      }
+      closeSingleForceDeleteModal()
+      fetchTickets(pagination.value.current_page ?? 1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Failed to permanently delete ticket.')
+    },
+    onFinish: () => {
+      isSingleForceDeleting.value = false
     },
   })
 }
@@ -1290,7 +1381,7 @@ function submitBulkAssign() {
   })
 }
 
-// Bulk Delete (Admin only)
+// Bulk Delete (Move to Trash - Admin only)
 const showBulkDeleteModal = ref(false)
 const isBulkDeleting = ref(false)
 
@@ -1311,16 +1402,106 @@ function submitBulkDelete() {
   }, {
     preserveScroll: true,
     onSuccess: () => {
-      toast.success(`${selectedIds.value.length} tickets and related logs deleted successfully!`)
+      toast.success(`${selectedIds.value.length} tickets moved to trash!`)
       clearSelection()
       closeBulkDeleteModal()
       fetchTickets(pagination.value.current_page ?? 1)
     },
     onError: (err) => {
-      toast.error(err?.message || 'Bulk delete failed.')
+      toast.error(err?.message || 'Bulk move to trash failed.')
     },
     onFinish: () => {
       isBulkDeleting.value = false
+    },
+  })
+}
+
+// Bulk Restore from Trash
+const isBulkRestoring = ref(false)
+
+function submitBulkRestore() {
+  if (!selectedIds.value.length || isBulkRestoring.value) return
+  isBulkRestoring.value = true
+  router.post('/admin/tickets-v2/bulk-restore', {
+    ticket_ids: selectedIds.value,
+  }, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`${selectedIds.value.length} tickets restored from trash!`)
+      clearSelection()
+      fetchTickets(pagination.value.current_page ?? 1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Bulk restore failed.')
+    },
+    onFinish: () => {
+      isBulkRestoring.value = false
+    },
+  })
+}
+
+// Bulk Permanent Force Delete
+const showBulkForceDeleteModal = ref(false)
+const isBulkForceDeleting = ref(false)
+
+function openBulkForceDeleteModal() {
+  if (!selectedIds.value.length || !isAdmin.value) return
+  showBulkForceDeleteModal.value = true
+}
+
+function closeBulkForceDeleteModal() {
+  showBulkForceDeleteModal.value = false
+}
+
+function submitBulkForceDelete() {
+  if (!selectedIds.value.length || isBulkForceDeleting.value) return
+  isBulkForceDeleting.value = true
+  router.post('/admin/tickets-v2/bulk-force-delete', {
+    ticket_ids: selectedIds.value,
+  }, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success(`${selectedIds.value.length} tickets permanently deleted!`)
+      clearSelection()
+      closeBulkForceDeleteModal()
+      fetchTickets(pagination.value.current_page ?? 1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Bulk permanent delete failed.')
+    },
+    onFinish: () => {
+      isBulkForceDeleting.value = false
+    },
+  })
+}
+
+// Empty Entire Trash
+const showEmptyTrashModal = ref(false)
+const isEmptyingTrash = ref(false)
+
+function openEmptyTrashModal() {
+  showEmptyTrashModal.value = true
+}
+
+function closeEmptyTrashModal() {
+  showEmptyTrashModal.value = false
+}
+
+function submitEmptyTrash() {
+  isEmptyingTrash.value = true
+  router.post('/admin/tickets-v2/empty-trash', {}, {
+    preserveScroll: true,
+    onSuccess: () => {
+      toast.success('Trash emptied successfully! All trashed tickets purged.')
+      clearSelection()
+      closeEmptyTrashModal()
+      fetchTickets(1)
+    },
+    onError: (err) => {
+      toast.error(err?.message || 'Failed to empty trash.')
+    },
+    onFinish: () => {
+      isEmptyingTrash.value = false
     },
   })
 }
@@ -1759,6 +1940,17 @@ const divisionDistribution = computed(() => {
           <span class="hidden sm:inline">Export CSV</span>
         </button>
 
+        <!-- Notification Sound & Ringtone Settings Button -->
+        <button
+          type="button"
+          @click="showSoundSettingsModal = true"
+          class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-300 transition shadow-2xs cursor-pointer"
+          title="Notification Ringtone & Sound Settings"
+        >
+          <i class="fa-solid fa-volume-high text-sky-600 text-xs"></i>
+          <span class="hidden sm:inline">Ringtone</span>
+        </button>
+
         <!-- GitHub / Linear Style Display Options Popover -->
         <div class="relative inline-block text-left" v-click-outside="() => (showDisplayMenu = false)">
           <button
@@ -1888,8 +2080,19 @@ const divisionDistribution = computed(() => {
           </button>
         </div>
 
-        <!-- Workflow Presets Popover Dropdown -->
-        <div class="relative shrink-0" v-click-outside="() => (showPresetsMenu = false)">
+        <!-- Right Controls: Events Calendar & Workflow Presets -->
+        <div class="flex items-center gap-2 shrink-0">
+          <Link
+            :href="route('admin.events.index')"
+            class="h-9 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-2xs"
+            title="Open Google Calendar style events monitoring"
+          >
+            <i class="fa-solid fa-calendar-days text-blue-600 text-xs"></i>
+            <span>Events Calendar</span>
+          </Link>
+
+          <!-- Workflow Presets Popover Dropdown -->
+          <div class="relative shrink-0" v-click-outside="() => (showPresetsMenu = false)">
           <button
             type="button"
             @click="showPresetsMenu = !showPresetsMenu"
@@ -1997,6 +2200,7 @@ const divisionDistribution = computed(() => {
           </div>
         </div>
       </div>
+    </div>
     </div>
 
     <div class="block w-full p-6">
@@ -2355,36 +2559,66 @@ const divisionDistribution = computed(() => {
         </div>
 
         <div class="flex items-center gap-2 flex-wrap">
-          <button
-            v-if="isAdmin"
-            type="button"
-            @click="openBulkAssignModal"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition cursor-pointer border border-white/10"
-          >
-            <i class="fa-solid fa-user-plus text-xs text-blue-400"></i>
-            <span>Assign Staff</span>
-          </button>
+          <!-- When in Trash View: Restore Selected & Purge Selected -->
+          <template v-if="isTrashView">
+            <button
+              v-if="isAdmin"
+              type="button"
+              :disabled="isBulkRestoring"
+              @click="submitBulkRestore"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-emerald-500/40 disabled:opacity-50"
+              title="Restore selected tickets back to active queue"
+            >
+              <i v-if="isBulkRestoring" class="fa-solid fa-spinner animate-spin text-xs"></i>
+              <i v-else class="fa-solid fa-rotate-left text-xs"></i>
+              <span>Restore Selected</span>
+            </button>
 
-          <button
-            type="button"
-            @click="exportCsv(true)"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-emerald-500/40"
-          >
-            <i class="fa-solid fa-file-csv text-xs"></i>
-            <span>Export CSV</span>
-          </button>
+            <button
+              v-if="isAdmin"
+              type="button"
+              @click="openBulkForceDeleteModal"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-rose-500/40"
+              title="Permanently purge selected tickets"
+            >
+              <i class="fa-solid fa-trash text-xs"></i>
+              <span>Delete Permanently</span>
+            </button>
+          </template>
 
-          <!-- Admin Bulk Delete -->
-          <button
-            v-if="isAdmin"
-            type="button"
-            @click="openBulkDeleteModal"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-rose-500/40"
-            title="Permanently delete selected tickets (Admin only)"
-          >
-            <i class="fa-regular fa-trash-can text-xs"></i>
-            <span>Delete Selected</span>
-          </button>
+          <!-- Normal Active View Bulk Actions -->
+          <template v-else>
+            <button
+              v-if="isAdmin"
+              type="button"
+              @click="openBulkAssignModal"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition cursor-pointer border border-white/10"
+            >
+              <i class="fa-solid fa-user-plus text-xs text-blue-400"></i>
+              <span>Assign Staff</span>
+            </button>
+
+            <button
+              type="button"
+              @click="exportCsv(true)"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-emerald-500/40"
+            >
+              <i class="fa-solid fa-file-csv text-xs"></i>
+              <span>Export CSV</span>
+            </button>
+
+            <!-- Admin Bulk Move to Trash -->
+            <button
+              v-if="isAdmin"
+              type="button"
+              @click="openBulkDeleteModal"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition cursor-pointer shadow-xs border border-rose-500/40"
+              title="Move selected tickets to Trash"
+            >
+              <i class="fa-regular fa-trash-can text-xs"></i>
+              <span>Move to Trash</span>
+            </button>
+          </template>
 
           <button
             type="button"
@@ -2392,6 +2626,42 @@ const divisionDistribution = computed(() => {
             class="px-3 py-1.5 rounded-xl text-xs text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
           >
             Deselect
+          </button>
+        </div>
+      </div>
+
+      <!-- ── Trash View Notice Banner ─────────────────────────────────── -->
+      <div
+        v-if="isTrashView"
+        class="mb-3 px-4 py-3 bg-rose-50 border border-rose-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-900 shadow-2xs"
+      >
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+            <i class="fa-solid fa-trash-can text-sm"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-sm text-rose-950">Trash Bin</span>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200/80 text-rose-800">
+                {{ counts?.Trash ?? pagination?.total ?? 0 }} {{ (counts?.Trash ?? pagination?.total ?? 0) === 1 ? 'ticket' : 'tickets' }}
+              </span>
+            </div>
+            <p class="text-rose-700 text-[11px] mt-0.5">
+              Soft-deleted tickets are safely retained here and excluded from active queues and dashboards. You can restore them or permanently purge them.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
+          <button
+            v-if="isAdmin && (counts?.Trash > 0 || tickets.length > 0)"
+            type="button"
+            @click="openEmptyTrashModal"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-300 bg-white hover:bg-rose-100 text-rose-700 font-bold transition shadow-2xs cursor-pointer"
+            title="Permanently remove all tickets in Trash"
+          >
+            <i class="fa-solid fa-fire text-xs"></i>
+            <span>Empty Trash</span>
           </button>
         </div>
       </div>
@@ -2721,56 +2991,97 @@ const divisionDistribution = computed(() => {
               <!-- Actions (Role-Focused: Dispatch & Management) -->
               <td v-if="columns.actions" :class="isCompact ? 'px-4 py-2 text-right' : 'px-6 py-3.5 text-right'" @click.stop>
                 <div class="inline-flex items-center gap-1.5 justify-end">
-                  <!-- 1. Primary Contextual Action Button (Only Staff Assignment allowed for Admins, NO status changing) -->
-                  <!-- If Admin & New / Unassigned: Quick Assign to Staff -->
-                  <button
-                    v-if="isAdmin && (ticket.detail?.ticket_status === 'New' || !ticket.detail?.ticket_assigned_staff)"
-                    type="button"
-                    @click.stop="openQuickAssign(ticket)"
-                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
-                    title="Assign to IT staff"
-                  >
-                    <i class="fa-solid fa-user-plus text-blue-600 text-xs"></i>
-                    <span class="hidden md:inline">Assign</span>
-                  </button>
+                  <!-- ── A. Actions for Trash View ──────────────────────── -->
+                  <template v-if="isTrashView">
+                    <!-- Restore Button -->
+                    <button
+                      v-if="isAdmin"
+                      type="button"
+                      :disabled="isRestoring"
+                      @click.stop="restoreTicket(ticket)"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                      title="Restore ticket back to active queue"
+                    >
+                      <i class="fa-solid fa-rotate-left text-emerald-600 text-xs"></i>
+                      <span class="hidden md:inline">Restore</span>
+                    </button>
 
-                  <!-- If Admin & Pending / In Progress: Quick Reassign Staff -->
-                  <button
-                    v-else-if="isAdmin && (ticket.detail?.ticket_status === 'Pending' || ticket.detail?.ticket_status === 'In Progress')"
-                    type="button"
-                    @click.stop="openQuickAssign(ticket)"
-                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition shadow-2xs cursor-pointer"
-                    title="Reassign to another IT staff member"
-                  >
-                    <i class="fa-solid fa-user-gear text-slate-500 text-xs"></i>
-                    <span class="hidden md:inline">Reassign</span>
-                  </button>
+                    <!-- View Details -->
+                    <button
+                      type="button"
+                      @click.stop="openModal(ticket, 'overview')"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-medium text-xs transition shadow-2xs cursor-pointer"
+                      title="View archived ticket details"
+                    >
+                      <i class="fa-regular fa-eye text-slate-400 text-xs"></i>
+                      <span class="hidden md:inline">View</span>
+                    </button>
 
-                  <!-- If Completed / Closed OR Staff: View Details (No status changing) -->
-                  <button
-                    v-else
-                    type="button"
-                    @click.stop="openModal(ticket, 'overview')"
-                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-medium text-xs transition shadow-2xs cursor-pointer"
-                    title="View ticket details"
-                  >
-                    <i class="fa-regular fa-eye text-slate-400 text-xs"></i>
-                    <span class="hidden md:inline">View</span>
-                  </button>
+                    <!-- Permanently Delete Button -->
+                    <button
+                      v-if="isAdmin"
+                      type="button"
+                      @click.stop="openSingleForceDeleteModal(ticket)"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                      title="Permanently purge ticket from database"
+                    >
+                      <i class="fa-solid fa-trash text-rose-500 text-xs"></i>
+                      <span class="hidden md:inline">Purge</span>
+                    </button>
+                  </template>
 
-                  <!-- Direct Delete Button (Admin and Super Admin) -->
-                  <button
-                    v-if="isAdmin"
-                    type="button"
-                    @click.stop="openSingleDeleteModal(ticket)"
-                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
-                    title="Permanently delete ticket (Admin / Super Admin)"
-                  >
-                    <i class="fa-regular fa-trash-can text-rose-500 text-xs"></i>
-                    <span class="hidden md:inline">Delete</span>
-                  </button>
+                  <!-- ── B. Actions for Active Queue View ───────────────── -->
+                  <template v-else>
+                    <!-- If Admin & New / Unassigned: Quick Assign to Staff -->
+                    <button
+                      v-if="isAdmin && (ticket.detail?.ticket_status === 'New' || !ticket.detail?.ticket_assigned_staff)"
+                      type="button"
+                      @click.stop="openQuickAssign(ticket)"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                      title="Assign to IT staff"
+                    >
+                      <i class="fa-solid fa-user-plus text-blue-600 text-xs"></i>
+                      <span class="hidden md:inline">Assign</span>
+                    </button>
 
-                  <!-- 2. More Actions ('···') Dropdown Menu (Strictly Non-Redundant & Non-Status) -->
+                    <!-- If Admin & Pending / In Progress: Quick Reassign Staff -->
+                    <button
+                      v-else-if="isAdmin && (ticket.detail?.ticket_status === 'Pending' || ticket.detail?.ticket_status === 'In Progress')"
+                      type="button"
+                      @click.stop="openQuickAssign(ticket)"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                      title="Reassign to another IT staff member"
+                    >
+                      <i class="fa-solid fa-user-gear text-slate-500 text-xs"></i>
+                      <span class="hidden md:inline">Reassign</span>
+                    </button>
+
+                    <!-- If Completed / Closed OR Staff: View Details -->
+                    <button
+                      v-else
+                      type="button"
+                      @click.stop="openModal(ticket, 'overview')"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-medium text-xs transition shadow-2xs cursor-pointer"
+                      title="View ticket details"
+                    >
+                      <i class="fa-regular fa-eye text-slate-400 text-xs"></i>
+                      <span class="hidden md:inline">View</span>
+                    </button>
+
+                    <!-- Move to Trash Button (Admin and Super Admin) -->
+                    <button
+                      v-if="isAdmin"
+                      type="button"
+                      @click.stop="openSingleDeleteModal(ticket)"
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-semibold text-xs transition shadow-2xs cursor-pointer"
+                      title="Move ticket to Trash (Admin / Super Admin)"
+                    >
+                      <i class="fa-regular fa-trash-can text-rose-500 text-xs"></i>
+                      <span class="hidden md:inline">Trash</span>
+                    </button>
+                  </template>
+
+                  <!-- 2. More Actions ('···') Dropdown Menu -->
                   <div
                     class="relative inline-block text-left"
                     v-click-outside="() => { if (activeRowMenuId === getTicketKey(ticket)) closeRowMenu() }"
@@ -2792,55 +3103,95 @@ const divisionDistribution = computed(() => {
                       class="absolute right-0 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-20 divide-y divide-slate-100"
                       :class="isNearBottom(index) ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
                     >
-                      <div class="py-1">
-                        <button
-                          v-if="isAdmin"
-                          type="button"
-                          @click.stop="openQuickAssign(ticket); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <i class="fa-solid fa-user-gear text-slate-400 w-3.5 text-center"></i>
-                          <span>Assign / Reassign</span>
-                        </button>
-                        <button
-                          type="button"
-                          @click.stop="openModal(ticket, 'overview'); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <i class="fa-regular fa-eye text-slate-400 w-3.5 text-center"></i>
-                          <span>View Details</span>
-                        </button>
-                        <button
-                          type="button"
-                          @click.stop="openEditModal(ticket); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <i class="fa-solid fa-pen-to-square text-slate-400 w-3.5 text-center"></i>
-                          <span>Edit Ticket</span>
-                        </button>
-                      </div>
+                      <template v-if="isTrashView">
+                        <div class="py-1">
+                          <button
+                            type="button"
+                            @click.stop="openModal(ticket, 'overview'); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-regular fa-eye text-slate-400 w-3.5 text-center"></i>
+                            <span>View Details</span>
+                          </button>
+                          <button
+                            type="button"
+                            @click.stop="copyReferenceNumber(ticket.client_referenceNo); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-regular fa-copy text-slate-400 w-3.5 text-center"></i>
+                            <span>Copy Reference No.</span>
+                          </button>
+                        </div>
+                        <div v-if="isAdmin" class="py-1">
+                          <button
+                            type="button"
+                            @click.stop="restoreTicket(ticket); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          >
+                            <i class="fa-solid fa-rotate-left text-emerald-600 w-3.5 text-center"></i>
+                            <span>Restore to Active</span>
+                          </button>
+                          <button
+                            type="button"
+                            @click.stop="openSingleForceDeleteModal(ticket); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          >
+                            <i class="fa-solid fa-trash text-rose-500 w-3.5 text-center"></i>
+                            <span>Delete Permanently</span>
+                          </button>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="py-1">
+                          <button
+                            v-if="isAdmin"
+                            type="button"
+                            @click.stop="openQuickAssign(ticket); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-solid fa-user-gear text-slate-400 w-3.5 text-center"></i>
+                            <span>Assign / Reassign</span>
+                          </button>
+                          <button
+                            type="button"
+                            @click.stop="openModal(ticket, 'overview'); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-regular fa-eye text-slate-400 w-3.5 text-center"></i>
+                            <span>View Details</span>
+                          </button>
+                          <button
+                            type="button"
+                            @click.stop="openEditModal(ticket); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-solid fa-pen-to-square text-slate-400 w-3.5 text-center"></i>
+                            <span>Edit Ticket</span>
+                          </button>
+                        </div>
 
-                      <div class="py-1">
-                        <button
-                          type="button"
-                          @click.stop="copyReferenceNumber(ticket.client_referenceNo); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <i class="fa-regular fa-copy text-slate-400 w-3.5 text-center"></i>
-                          <span>Copy Reference No.</span>
-                        </button>
-                      </div>
+                        <div class="py-1">
+                          <button
+                            type="button"
+                            @click.stop="copyReferenceNumber(ticket.client_referenceNo); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <i class="fa-regular fa-copy text-slate-400 w-3.5 text-center"></i>
+                            <span>Copy Reference No.</span>
+                          </button>
+                        </div>
 
-                      <div v-if="isAdmin" class="py-1">
-                        <button
-                          type="button"
-                          @click.stop="openSingleDeleteModal(ticket); closeRowMenu()"
-                          class="w-full text-left px-3.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                        >
-                          <i class="fa-regular fa-trash-can text-rose-500 w-3.5 text-center"></i>
-                          <span>Delete Ticket</span>
-                        </button>
-                      </div>
+                        <div v-if="isAdmin" class="py-1">
+                          <button
+                            type="button"
+                            @click.stop="openSingleDeleteModal(ticket); closeRowMenu()"
+                            class="w-full text-left px-3.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          >
+                            <i class="fa-regular fa-trash-can text-rose-500 w-3.5 text-center"></i>
+                            <span>Move to Trash</span>
+                          </button>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -3731,17 +4082,17 @@ const divisionDistribution = computed(() => {
     </div>
   </Modal>
 
-  <!-- ── MODAL - Bulk Delete Tickets (Admin only) ──────────────────────── -->
+  <!-- ── MODAL - Bulk Move to Trash (Admin only) ──────────────────────── -->
   <Modal :show="showBulkDeleteModal" @close="closeBulkDeleteModal" maxWidth="md">
     <div class="p-6 bg-white rounded-2xl">
       <div class="flex items-center justify-between pb-3 border-b border-rose-100">
         <div class="flex items-center gap-2">
           <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
-            <i class="fa-solid fa-triangle-exclamation text-rose-600 text-sm"></i>
+            <i class="fa-solid fa-trash-can text-rose-600 text-sm"></i>
           </div>
           <div>
-            <h3 class="text-base font-bold text-slate-900">Confirm Bulk Deletion</h3>
-            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent administrative action</p>
+            <h3 class="text-base font-bold text-slate-900">Move Tickets to Trash?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Safe archival to Trash bin</p>
           </div>
         </div>
         <button type="button" @click="closeBulkDeleteModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
@@ -3751,10 +4102,10 @@ const divisionDistribution = computed(() => {
 
       <div class="space-y-3 py-4 text-xs">
         <p class="text-slate-700">
-          Are you sure you want to permanently delete <strong class="text-rose-700 font-bold">{{ selectedCount }} selected tickets</strong>?
+          Are you sure you want to move <strong class="text-rose-700 font-bold">{{ selectedCount }} selected tickets</strong> to the Trash bin?
         </p>
-        <p class="text-slate-500 bg-rose-50 p-2.5 rounded-lg border border-rose-100">
-          This will permanently delete the tickets and all associated records, including messages, attachments, technical details, and activity audit logs. This action <span class="font-bold text-rose-700">cannot be undone</span>.
+        <p class="text-slate-600 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
+          These tickets will be hidden from all active queues, dashboards, and client tracking. All messages, attachments, and data are safely retained and can be <strong>restored at any time</strong> from the Trash tab.
         </p>
       </div>
 
@@ -3772,23 +4123,23 @@ const divisionDistribution = computed(() => {
           @click="submitBulkDelete"
           class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 transition cursor-pointer"
         >
-          {{ isBulkDeleting ? 'Deleting...' : `Delete ${selectedCount} Tickets` }}
+          {{ isBulkDeleting ? 'Moving...' : `Move ${selectedCount} Tickets to Trash` }}
         </button>
       </div>
     </div>
   </Modal>
 
-  <!-- ── MODAL - Single Delete Ticket (Admin only) ────────────────────── -->
+  <!-- ── MODAL - Single Move to Trash (Admin only) ────────────────────── -->
   <Modal :show="showSingleDeleteModal" @close="closeSingleDeleteModal" maxWidth="md">
     <div class="p-6 bg-white rounded-2xl">
       <div class="flex items-center justify-between pb-3 border-b border-rose-100">
         <div class="flex items-center gap-2">
           <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
-            <i class="fa-solid fa-triangle-exclamation text-rose-600 text-sm"></i>
+            <i class="fa-solid fa-trash-can text-rose-600 text-sm"></i>
           </div>
           <div>
-            <h3 class="text-base font-bold text-slate-900">Delete Ticket?</h3>
-            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent administrative action</p>
+            <h3 class="text-base font-bold text-slate-900">Move Ticket to Trash?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Safe archival to Trash bin</p>
           </div>
         </div>
         <button type="button" @click="closeSingleDeleteModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
@@ -3798,13 +4149,14 @@ const divisionDistribution = computed(() => {
 
       <div class="space-y-3 py-4 text-xs">
         <p class="text-slate-700 leading-relaxed">
-          This will permanently delete
-          <strong class="font-mono text-rose-700 font-bold">Ticket {{ expectedDeleteRef }}</strong>
+          Move <strong class="font-mono text-rose-700 font-bold">Ticket {{ expectedDeleteRef }}</strong>
           <span v-if="ticketToDelete?.client_name">
             for <strong class="text-slate-900 font-bold">{{ ticketToDelete.client_name }}</strong>
-          </span>,
-          along with all messages, attachments, technical details, and activity audit logs.
-          This action <span class="font-bold text-rose-700">cannot be undone</span>.
+          </span> to the Trash bin?
+        </p>
+
+        <p class="text-slate-600 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
+          This ticket will be hidden from the active queue. All messages, attachments, and logs are preserved, and you can <strong>restore it at any time</strong> from the Trash tab.
         </p>
 
         <div>
@@ -3837,7 +4189,169 @@ const divisionDistribution = computed(() => {
           @click="submitSingleDelete"
           class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
         >
-          {{ isSingleDeleting ? 'Deleting...' : 'Delete' }}
+          {{ isSingleDeleting ? 'Moving...' : 'Move to Trash' }}
+        </button>
+      </div>
+    </div>
+  </Modal>
+
+  <!-- ── MODAL - Bulk Permanently Force Delete (Admin only) ──────────────── -->
+  <Modal :show="showBulkForceDeleteModal" @close="closeBulkForceDeleteModal" maxWidth="md">
+    <div class="p-6 bg-white rounded-2xl">
+      <div class="flex items-center justify-between pb-3 border-b border-rose-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+            <i class="fa-solid fa-triangle-exclamation text-rose-600 text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Permanently Delete Selected?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent administrative action</p>
+          </div>
+        </div>
+        <button type="button" @click="closeBulkForceDeleteModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 py-4 text-xs">
+        <p class="text-slate-700">
+          Are you sure you want to permanently delete <strong class="text-rose-700 font-bold">{{ selectedCount }} selected tickets</strong>?
+        </p>
+        <p class="text-slate-600 bg-rose-50 p-3 rounded-xl border border-rose-200 leading-relaxed">
+          This will permanently wipe the tickets, attachments on disk, messages, and all activity audit logs from the database. <span class="font-bold text-rose-700">This action cannot be undone.</span>
+        </p>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          @click="closeBulkForceDeleteModal"
+          class="px-3.5 py-2 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          :disabled="isBulkForceDeleting"
+          @click="submitBulkForceDelete"
+          class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-700 hover:bg-rose-800 disabled:opacity-50 transition cursor-pointer"
+        >
+          {{ isBulkForceDeleting ? 'Purging...' : `Permanently Delete (${selectedCount})` }}
+        </button>
+      </div>
+    </div>
+  </Modal>
+
+  <!-- ── MODAL - Single Permanent Force Delete (Admin only) ─────────────── -->
+  <Modal :show="showSingleForceDeleteModal" @close="closeSingleForceDeleteModal" maxWidth="md">
+    <div class="p-6 bg-white rounded-2xl">
+      <div class="flex items-center justify-between pb-3 border-b border-rose-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+            <i class="fa-solid fa-triangle-exclamation text-rose-600 text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Permanently Delete Ticket?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent administrative action</p>
+          </div>
+        </div>
+        <button type="button" @click="closeSingleForceDeleteModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 py-4 text-xs">
+        <p class="text-slate-700 leading-relaxed">
+          This will permanently delete
+          <strong class="font-mono text-rose-700 font-bold">Ticket {{ expectedForceDeleteRef }}</strong>
+          <span v-if="ticketToForceDelete?.client_name">
+            for <strong class="text-slate-900 font-bold">{{ ticketToForceDelete.client_name }}</strong>
+          </span>,
+          along with all messages, disk files, technical details, and audit logs.
+          This action <span class="font-bold text-rose-700">cannot be undone</span>.
+        </p>
+
+        <div>
+          <label class="block text-xs text-slate-600 mb-1.5">
+            Type <span class="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 select-all">{{ expectedForceDeleteRef }}</span> to confirm.
+          </label>
+          <input
+            ref="singleForceDeleteInputRef"
+            v-model.trim="singleForceDeleteTypedRef"
+            type="text"
+            class="w-full rounded-lg border border-slate-300 focus:ring-2 focus:ring-rose-500 focus:border-rose-500 px-3 py-2 text-xs font-mono text-slate-800"
+            :placeholder="expectedForceDeleteRef"
+            @keyup.enter="canConfirmSingleForceDelete ? submitSingleForceDelete() : null"
+          />
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          :disabled="isSingleForceDeleting"
+          @click="closeSingleForceDeleteModal"
+          class="px-3.5 py-2 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          :disabled="!canConfirmSingleForceDelete || isSingleForceDeleting"
+          @click="submitSingleForceDelete"
+          class="px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-700 hover:bg-rose-800 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
+        >
+          {{ isSingleForceDeleting ? 'Purging...' : 'Delete Permanently' }}
+        </button>
+      </div>
+    </div>
+  </Modal>
+
+  <!-- ── MODAL - Empty Trash Confirmation (Admin only) ──────────────────── -->
+  <Modal :show="showEmptyTrashModal" @close="closeEmptyTrashModal" maxWidth="md">
+    <div class="p-6 bg-white rounded-2xl">
+      <div class="flex items-center justify-between pb-3 border-b border-rose-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+            <i class="fa-solid fa-fire text-rose-600 text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Empty Entire Trash?</h3>
+            <p class="text-xs text-rose-600 font-medium mt-0.5">Permanent purge of all trashed items</p>
+          </div>
+        </div>
+        <button type="button" @click="closeEmptyTrashModal" class="text-slate-400 hover:text-slate-600 cursor-pointer">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 py-4 text-xs">
+        <p class="text-slate-700 leading-relaxed">
+          Are you sure you want to permanently purge <strong>all tickets currently in Trash</strong>?
+        </p>
+        <p class="text-slate-600 bg-rose-50 p-3 rounded-xl border border-rose-200 leading-relaxed">
+          This will permanently delete all trashed tickets, including physical files on disk, chat messages, CSM ratings, and audit records. <span class="font-bold text-rose-700">This action cannot be undone.</span>
+        </p>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          :disabled="isEmptyingTrash"
+          @click="closeEmptyTrashModal"
+          class="px-3.5 py-2 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          :disabled="isEmptyingTrash"
+          @click="submitEmptyTrash"
+          class="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase rounded-lg shadow-sm text-white bg-rose-700 hover:bg-rose-800 disabled:opacity-50 transition cursor-pointer"
+        >
+          <i v-if="isEmptyingTrash" class="fa-solid fa-spinner animate-spin text-xs"></i>
+          <i v-else class="fa-solid fa-fire text-xs"></i>
+          <span>{{ isEmptyingTrash ? 'Emptying Trash...' : 'Empty Trash Now' }}</span>
         </button>
       </div>
     </div>
@@ -3990,5 +4504,11 @@ const divisionDistribution = computed(() => {
       </div>
     </div>
   </Modal>
+
+    <!-- ── 6. SOUND NOTIFICATION SETTINGS MODAL ──────────────────────────── -->
+    <ModalNotificationSoundSettings
+      :show="showSoundSettingsModal"
+      @close="showSoundSettingsModal = false"
+    />
   </div>
 </template>

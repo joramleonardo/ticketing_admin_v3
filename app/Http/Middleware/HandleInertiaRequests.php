@@ -25,6 +25,7 @@ class HandleInertiaRequests extends Middleware
             ],
             'staffMembers' => fn () => $request->user() ? app(\App\Services\StaffService::class)->getActiveStaffNames() : [],
             'classifications' => fn () => \App\Support\TicketClassification::all(),
+            'notificationSound' => fn () => $request->user() ? \App\Models\AppSetting::get('notification_sound_settings', \App\Http\Controllers\Admin\NotificationSoundController::DEFAULT_SETTINGS) : null,
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),

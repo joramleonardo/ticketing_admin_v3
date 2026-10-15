@@ -150,3 +150,34 @@ it('can update ticket parameters including problem description and record activi
     expect($editLog)->not->toBeNull()
         ->and($editLog->activity_user)->toBe('Tech Specialist');
 });
+
+it('can complete a ticket with Server Related type', function (): void {
+    Illuminate\Support\Facades\Mail::fake();
+    $user = User::factory()->create(['name' => 'Server Admin']);
+
+    $ticketId = DB::table('v2_ticket_details')->insertGetId([
+        'client_referenceNo' => 'REF-SRV-001',
+        'ticket_type' => 'Technical Support',
+        'ticket_nature_of_support' => 'Hardware',
+        'ticket_status' => TicketStatus::InProgress->value,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $response = $this->actingAs($user)->put(route('tickets.complete', $ticketId), [
+        'ticket_status' => TicketStatus::Completed->value,
+        'ticket_type' => 'Technical Support',
+        'ticket_nature_of_support' => 'Hardware',
+        'ticket_support_type' => 'Troubleshoot',
+        'ticket_related_type' => 'Server Related',
+        'ticket_actions_taken' => 'Rebooted primary application server and cleaned temp caches.',
+        'ticket_remarks' => 'N/A',
+    ]);
+
+    $response->assertRedirect();
+    $response->assertSessionHasNoErrors();
+
+    $ticket = DB::table('v2_ticket_details')->where('ticket_id', $ticketId)->first();
+    expect($ticket->ticket_status)->toBe(TicketStatus::Completed->value)
+        ->and($ticket->ticket_related_type)->toBe('Server Related');
+});

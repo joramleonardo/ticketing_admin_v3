@@ -40,6 +40,13 @@ function getInitialFormData() {
         ticket_type: 'Technical Support',
         ticket_problem_that_needed_support: '',
 
+        // Events Specifics
+        event_start_date: '',
+        event_end_date: '',
+        event_venue: '',
+        event_remarks: '',
+        other_request: '',
+
         // Late Request Specifics
         ticket_nature_of_support: 'Hardware',
         ticket_support_type: 'Computer / Laptop',
@@ -181,6 +188,17 @@ watch(() => form.value.ticket_nature_of_support, (val) => {
     }
 })
 
+// Request type change handler
+watch(() => form.value.ticket_type, (newType) => {
+    if (newType === 'Events') {
+        form.value.ticket_nature_of_support = 'Events'
+        form.value.ticket_support_type = 'Audio & Visual Setup'
+    } else if (form.value.ticket_nature_of_support === 'Events') {
+        form.value.ticket_nature_of_support = 'Hardware'
+        form.value.ticket_support_type = 'Computer / Laptop'
+    }
+})
+
 // Toggle assisted by staff
 function toggleAssistedStaff(name) {
     const idx = form.value.ticket_assisted_by.indexOf(name)
@@ -199,6 +217,32 @@ const submit = () => {
 
     if (creationMode.value === 'standard') {
         // STANDARD (REAL-TIME) REQUEST -> /tickets-v2
+        if (form.value.ticket_type === 'Events') {
+            if (!form.value.event_start_date) {
+                isSubmitting.value = false
+                errors.value = { event_start_date: ['Event start date is required.'] }
+                toast.error('Event start date is required.')
+                return
+            }
+            if (!form.value.event_venue?.trim()) {
+                isSubmitting.value = false
+                errors.value = { event_venue: ['Event venue is required.'] }
+                toast.error('Event venue is required.')
+                return
+            }
+            if (form.value.event_end_date && form.value.event_end_date < form.value.event_start_date) {
+                isSubmitting.value = false
+                errors.value = { event_end_date: ['Event end date cannot be earlier than start date.'] }
+                toast.error('Event end date cannot be earlier than start date.')
+                return
+            }
+        }
+
+        const standardProblemText = form.value.ticket_problem_that_needed_support?.trim()
+            || (form.value.ticket_type === 'Events'
+                ? (form.value.other_request?.trim() || form.value.event_remarks?.trim() || `Event Support: ${form.value.event_venue || 'Event'}`)
+                : '')
+
         const payload = {
             client_type: form.value.client_type,
             client_name: form.value.client_type === 'Internal'
@@ -208,7 +252,15 @@ const submit = () => {
             client_sex: form.value.client_sex || 'Prefer not to say',
             client_division_agency: form.value.client_division_agency || '',
             ticket_type: form.value.ticket_type,
-            ticket_problem_that_needed_support: form.value.ticket_problem_that_needed_support,
+            ticket_problem_that_needed_support: standardProblemText,
+        }
+
+        if (form.value.ticket_type === 'Events') {
+            payload.event_start_date = form.value.event_start_date || null
+            payload.event_end_date = form.value.event_end_date || null
+            payload.event_venue = form.value.event_venue?.trim() || null
+            payload.event_remarks = form.value.event_remarks?.trim() || null
+            payload.other_request = form.value.other_request?.trim() || null
         }
 
         router.post('/tickets-v2', payload, {
@@ -239,6 +291,22 @@ const submit = () => {
             }
         }
 
+        const isEvents = form.value.ticket_type === 'Events' || form.value.ticket_nature_of_support === 'Events'
+
+        if (isEvents && form.value.event_end_date && form.value.event_start_date && form.value.event_end_date < form.value.event_start_date) {
+            isSubmitting.value = false
+            errors.value = {
+                event_end_date: ['Event end date cannot be earlier than start date.'],
+            }
+            toast.error('Event end date cannot be earlier than start date.')
+            return
+        }
+
+        const lateProblemText = form.value.ticket_problem_that_needed_support?.trim()
+            || (isEvents
+                ? (form.value.other_request?.trim() || form.value.event_remarks?.trim() || `Event Support: ${form.value.event_venue || 'Event'}`)
+                : '')
+
         const payload = {
             client_type: form.value.client_type,
             client_name: form.value.client_type === 'Internal'
@@ -257,11 +325,19 @@ const submit = () => {
             ticket_assisted_by: form.value.ticket_assisted_by.length
                 ? form.value.ticket_assisted_by.join(', ')
                 : 'None',
-            ticket_problem_that_needed_support: form.value.ticket_problem_that_needed_support,
+            ticket_problem_that_needed_support: lateProblemText,
             ticket_actions_taken: form.value.ticket_actions_taken || 'Actions logged per late request.',
             ticket_remarks: form.value.ticket_remarks || '',
             date_requested: form.value.date_requested,
             date_completed: form.value.date_completed,
+        }
+
+        if (isEvents) {
+            payload.event_start_date = form.value.event_start_date || null
+            payload.event_end_date = form.value.event_end_date || null
+            payload.event_venue = form.value.event_venue?.trim() || null
+            payload.event_remarks = form.value.event_remarks?.trim() || null
+            payload.other_request = form.value.other_request?.trim() || null
         }
 
         router.post('/admin/tickets-v2', payload, {
@@ -503,6 +579,71 @@ const submit = () => {
                 </div>
             </div>
 
+            <!-- Event Specific Fields (When Events is selected) -->
+            <div v-if="form.ticket_type === 'Events'" class="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-4">
+                <div class="border-b border-amber-200/80 pb-2 flex items-center justify-between">
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-2">
+                        <span class="w-5 h-5 rounded-full bg-amber-200 text-amber-900 flex items-center justify-center text-xs font-bold">📅</span>
+                        Event Details
+                    </h4>
+                    <span class="text-[11px] font-semibold text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
+                        v2_ticket_events
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Event Start Date *</label>
+                        <input
+                            type="date"
+                            v-model="form.event_start_date"
+                            required
+                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 px-3 py-2 bg-white"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Event End Date (Optional)</label>
+                        <input
+                            type="date"
+                            v-model="form.event_end_date"
+                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 px-3 py-2 bg-white"
+                        />
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Event Venue *</label>
+                        <input
+                            type="text"
+                            v-model="form.event_venue"
+                            required
+                            placeholder="e.g. DOST-STII Cast Room / Atrium / Zoom"
+                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 px-3 py-2 bg-white"
+                        />
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Event Remarks (Optional)</label>
+                        <textarea
+                            v-model="form.event_remarks"
+                            rows="2"
+                            placeholder="Program details, coverage notes, or special setup instructions..."
+                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 p-2.5 bg-white"
+                        ></textarea>
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Other Request (Optional)</label>
+                        <textarea
+                            v-model="form.other_request"
+                            rows="2"
+                            placeholder="Equipment requests, accessories, microphones, clickers, cables, etc..."
+                            class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 p-2.5 bg-white"
+                        ></textarea>
+                    </div>
+                </div>
+            </div>
+
             <!-- Section 2: Problem Description -->
             <div class="space-y-4">
                 <div class="border-b pb-2">
@@ -513,12 +654,14 @@ const submit = () => {
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-gray-700 mb-1">Problem / Assistance Needed *</label>
+                    <label class="block text-xs font-semibold text-gray-700 mb-1">
+                        {{ form.ticket_type === 'Events' ? 'Problem / Additional Assistance Description (Optional)' : 'Problem / Assistance Needed *' }}
+                    </label>
                     <textarea
                         v-model="form.ticket_problem_that_needed_support"
-                        required
+                        :required="form.ticket_type !== 'Events'"
                         rows="3"
-                        placeholder="Describe the issue or assistance requested in detail..."
+                        :placeholder="form.ticket_type === 'Events' ? 'Optional description if not covered by event details above...' : 'Describe the issue or assistance requested in detail...'"
                         class="w-full text-xs sm:text-sm rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-900 focus:border-blue-900 p-3"
                     ></textarea>
                 </div>

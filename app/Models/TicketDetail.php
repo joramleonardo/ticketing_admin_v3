@@ -8,9 +8,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class TicketDetail extends Model
 {
+    use SoftDeletes;
+
     protected $table = 'v2_ticket_details';
 
     protected $primaryKey = 'ticket_id';
@@ -35,7 +38,7 @@ class TicketDetail extends Model
 
     public function client(): BelongsTo
     {
-        return $this->belongsTo(TicketClientDetail::class, 'client_referenceNo', 'client_referenceNo');
+        return $this->belongsTo(TicketClientDetail::class, 'client_referenceNo', 'client_referenceNo')->withTrashed();
     }
 
     public function rating(): HasOne

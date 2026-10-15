@@ -22,12 +22,17 @@ const props = defineProps({
 // ----- Form state -----
 const form = reactive({
   // always present
-  ticket_type: '',                     // "Livestream" | "Technical Support"
+  ticket_type: '',                     // "Events" | "Livestream" | "Technical Support"
   // sometimes present
   ticket_attended_by: '',              // optional
   ticket_nature_of_support: '',        // e.g., Hardware | Software | Network | Others
   ticket_support_type: '',             // depends on nature (or free text if Others)
   ticket_remarks: '',                  // text
+  event_start_date: '',
+  event_end_date: '',
+  event_venue: '',
+  event_remarks: '',
+  other_request: '',
 })
 
 const selectedGroup = ref('')
@@ -53,7 +58,7 @@ const canEdit = computed(() => {
 })
 
 // ----- Options (adjust as needed) -----
-const ticketTypeOptions = ['Livestream', 'Technical Support']
+const ticketTypeOptions = ['Events', 'Livestream', 'Technical Support']
 
 // You can swap these with your actual options used elsewhere
 const natureOptions = [
@@ -157,6 +162,13 @@ watch(
       props.ticket?.ticket_remarks ??
       ''
 
+    const ev = props.ticket?.event ?? props.ticket?.detail?.event ?? props.ticket ?? {}
+    form.event_start_date = ev?.event_start_date ?? ''
+    form.event_end_date = ev?.event_end_date ?? ''
+    form.event_venue = ev?.event_venue ?? ''
+    form.event_remarks = ev?.event_remarks ?? ''
+    form.other_request = ev?.other_request ?? ''
+
     if (!selectedGroup.value && hasGroupedStaff.value) {
       selectedGroup.value = Object.keys(props.groupedStaff)[0]
     }
@@ -189,6 +201,13 @@ function buildPayload() {
 
   if (canEdit.value.type) {
     payload.ticket_type = form.ticket_type.trim()
+  }
+  if (form.ticket_type === 'Events') {
+    payload.event_start_date = form.event_start_date || null
+    payload.event_end_date = form.event_end_date || null
+    payload.event_venue = form.event_venue?.trim() || null
+    payload.event_remarks = form.event_remarks?.trim() || null
+    payload.other_request = form.other_request?.trim() || null
   }
   if (canEdit.value.attendedBy) {
     payload.ticket_assigned_staff = form.ticket_attended_by?.trim() || null
@@ -278,6 +297,56 @@ async function onSubmit() {
           <p v-if="errors.ticket_type" class="mt-1 text-xs text-red-600">
             {{ errors.ticket_type }}
           </p>
+        </div>
+
+        <!-- Event fields when ticket_type === 'Events' -->
+        <div v-if="form.ticket_type === 'Events'" class="space-y-3 rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-indigo-900">Event Details</h4>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-700">Event Start Date</label>
+              <input
+                v-model="form.event_start_date"
+                type="date"
+                class="w-full rounded border px-3 py-2 text-sm bg-white"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-700">Event End Date</label>
+              <input
+                v-model="form.event_end_date"
+                type="date"
+                class="w-full rounded border px-3 py-2 text-sm bg-white"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-700">Event Venue</label>
+            <input
+              v-model.trim="form.event_venue"
+              type="text"
+              placeholder="e.g. STII Atrium / Online"
+              class="w-full rounded border px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-700">Event Remarks</label>
+            <textarea
+              v-model.trim="form.event_remarks"
+              rows="2"
+              placeholder="Special instructions, schedule notes..."
+              class="w-full rounded border px-3 py-2 text-sm bg-white"
+            ></textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-700">Other Request</label>
+            <textarea
+              v-model.trim="form.other_request"
+              rows="2"
+              placeholder="Equipment, microphones, accessories..."
+              class="w-full rounded border px-3 py-2 text-sm bg-white"
+            ></textarea>
+          </div>
         </div>
 
         <!-- Assigned Staff / Attended By (Pending | In Progress | Completed) -->
