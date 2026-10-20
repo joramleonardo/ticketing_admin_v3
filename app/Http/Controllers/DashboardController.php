@@ -183,31 +183,54 @@ class DashboardController extends Controller
             $monthsArr,
             $assignedStaff,
         )
-            ->select('td.ticket_status', 'td.date_requested', 'td.date_completed')
+            ->select(
+                'td.ticket_status',
+                'td.date_requested',
+                'td.date_assigned',
+                'td.date_attended',
+                'td.date_completed',
+                'td.created_at',
+            )
             ->get();
 
         $resolvedTotal = 0;
         $resolvedWithinSla = 0;
         $resolvedOverdue = 0;
         $totalResolvedMinutes = 0;
+        $responseCount = 0;
+        $totalResponseMinutes = 0;
         $activeOnTrack = 0;
         $activeWarning = 0;
         $activeBreached = 0;
+        $awaitingAssignment = 0;
         $now = now();
 
         foreach ($slaRecords as $rec) {
             $status = trim((string) $rec->ticket_status);
-            $reqDate = $rec->date_requested ? Carbon::parse($rec->date_requested) : null;
+            $reqDate = $rec->date_requested
+                ? Carbon::parse($rec->date_requested)
+                : ($rec->created_at ? Carbon::parse($rec->created_at) : null);
+            $assignDate = $rec->date_assigned ? Carbon::parse($rec->date_assigned) : null;
+            $attendDate = $rec->date_attended ? Carbon::parse($rec->date_attended) : null;
             $compDate = $rec->date_completed ? Carbon::parse($rec->date_completed) : null;
 
+            // Track Response Time (Assigned -> Attended) when attended
+            if ($attendDate && ($assignDate || $reqDate)) {
+                $respStart = $assignDate ?: $reqDate;
+                $respEnd = $attendDate->lessThan($respStart) ? $respStart->copy() : $attendDate;
+                $totalResponseMinutes += $respStart->diffInMinutes($respEnd);
+                $responseCount++;
+            }
+
             if (in_array($status, ['Completed', 'Closed'], true)) {
-                if ($reqDate) {
+                $tatStart = $attendDate ?: ($assignDate ?: $reqDate);
+                if ($tatStart) {
                     $resolvedTotal++;
                     $end = $compDate ?: $now;
-                    if ($end->lessThan($reqDate)) {
-                        $end = $reqDate->copy();
+                    if ($end->lessThan($tatStart)) {
+                        $end = $tatStart->copy();
                     }
-                    $mins = $reqDate->diffInMinutes($end);
+                    $mins = $tatStart->diffInMinutes($end);
                     $totalResolvedMinutes += $mins;
 
                     if ($mins <= 24 * 60) {
@@ -216,9 +239,16 @@ class DashboardController extends Controller
                         $resolvedOverdue++;
                     }
                 }
-            } elseif (in_array($status, ['New', 'Pending', 'In Progress'], true)) {
-                if ($reqDate) {
-                    $mins = $reqDate->diffInMinutes($now);
+            } elseif ($status === 'New') {
+                // Unassigned tickets do not count against technician SLA until assigned
+                $awaitingAssignment++;
+            } elseif (in_array($status, ['Pending', 'In Progress'], true)) {
+                $activeStart = $status === 'In Progress'
+                    ? ($attendDate ?: ($assignDate ?: $reqDate))
+                    : ($assignDate ?: $reqDate);
+
+                if ($activeStart) {
+                    $mins = $activeStart->diffInMinutes($now);
                     if ($mins > 48 * 60) {
                         $activeBreached++;
                     } elseif ($mins > 24 * 60) {
@@ -236,12 +266,26 @@ class DashboardController extends Controller
         $avgTatHours = $resolvedTotal > 0 ? round(($totalResolvedMinutes / $resolvedTotal) / 60, 1) : 0.0;
         $avgTatFormatted = $avgTatHours >= 24
             ? round($avgTatHours / 24, 1).' days'
-            : ($avgTatHours > 0 ? $avgTatHours.' hrs' : '< 1 hr');
+            : ($avgTatHours > 0 ? $avgTatHours.' hrs' : ($resolvedTotal > 0 ? '< 1 hr' : '—'));
+
+        $avgResponseHours = $responseCount > 0 ? round(($totalResponseMinutes / $responseCount) / 60, 1) : 0.0;
+        $avgResponseMinutes = $responseCount > 0 ? (int) round($totalResponseMinutes / $responseCount) : 0;
+        if ($responseCount === 0) {
+            $avgResponseFormatted = '—';
+        } elseif ($avgResponseMinutes < 60) {
+            $avgResponseFormatted = max(1, $avgResponseMinutes).'m';
+        } elseif ($avgResponseHours >= 24) {
+            $avgResponseFormatted = round($avgResponseHours / 24, 1).' days';
+        } else {
+            $avgResponseFormatted = $avgResponseHours.' hrs';
+        }
 
         $slaStats = [
             'compliance_rate' => $complianceRate,
             'avg_tat_formatted' => $avgTatFormatted,
             'avg_tat_hours' => $avgTatHours,
+            'avg_response_formatted' => $avgResponseFormatted,
+            'avg_response_hours' => $avgResponseHours,
             'resolved_total' => $resolvedTotal,
             'resolved_within_sla' => $resolvedWithinSla,
             'resolved_overdue' => $resolvedOverdue,
@@ -249,6 +293,7 @@ class DashboardController extends Controller
             'active_on_track' => $activeOnTrack,
             'active_warning' => $activeWarning,
             'active_breached' => $activeBreached,
+            'awaiting_assignment' => $awaitingAssignment,
         ];
 
         // Staff Workload Metrics
@@ -451,6 +496,8 @@ class DashboardController extends Controller
                 'td.ticket_nature_of_support',
                 'td.ticket_problem_that_needed_support',
                 'td.date_requested',
+                'td.date_assigned',
+                'td.date_attended',
                 'td.created_at',
             ])
             ->orderBy('td.date_requested', 'asc')
@@ -542,6 +589,8 @@ class DashboardController extends Controller
                 'td.ticket_nature_of_support',
                 'td.ticket_problem_that_needed_support',
                 'td.date_requested',
+                'td.date_assigned',
+                'td.date_attended',
                 'td.created_at',
                 'te.event_start_date',
                 'te.event_end_date',
@@ -553,12 +602,12 @@ class DashboardController extends Controller
             ->limit(6)
             ->get();
 
-        // Overdue tickets (> 24h active)
+        // Overdue tickets (> 24h since assignment or attendance)
         $overdueTickets = DB::table('v2_ticket_details as td')
             ->join('v2_ticket_client_details as c', 'c.client_referenceNo', '=', 'td.client_referenceNo')
             ->leftJoin('v2_ticket_events as te', 'te.client_referenceNo', '=', 'td.client_referenceNo')
-            ->whereIn('td.ticket_status', ['New', 'Pending', 'In Progress'])
-            ->where('td.date_requested', '<=', now()->subHours(24))
+            ->whereIn('td.ticket_status', ['Pending', 'In Progress'])
+            ->whereRaw('COALESCE(td.date_attended, td.date_assigned, td.date_requested, td.created_at) <= ?', [now()->subHours(24)])
             ->select([
                 'td.ticket_id',
                 'c.client_id',
@@ -573,13 +622,15 @@ class DashboardController extends Controller
                 'td.ticket_nature_of_support',
                 'td.ticket_problem_that_needed_support',
                 'td.date_requested',
+                'td.date_assigned',
+                'td.date_attended',
                 'te.event_start_date',
                 'te.event_end_date',
                 'te.event_venue',
                 'te.event_remarks',
                 'te.other_request',
             ])
-            ->orderBy('td.date_requested', 'asc')
+            ->orderByRaw('COALESCE(td.date_attended, td.date_assigned, td.date_requested, td.created_at) ASC')
             ->limit(6)
             ->get();
 

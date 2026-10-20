@@ -157,6 +157,8 @@ class TicketV2Controller extends Controller
                         'ticket_actions_taken',
                         'ticket_remarks',
                         'date_requested',
+                        'date_assigned',
+                        'date_attended',
                         'date_completed',
                         'created_at',
                     ])->with(['event' => function ($e) {
@@ -230,14 +232,8 @@ class TicketV2Controller extends Controller
             ->when($preset === 'overdue', function ($q) {
                 $cutoff = now()->subHours(24)->toDateTimeString();
                 $q->whereHas('detail', function ($d) use ($cutoff) {
-                    $d->whereIn('ticket_status', ['New', 'Pending', 'In Progress'])
-                        ->where(function ($sub) use ($cutoff) {
-                            $sub->where('date_requested', '<=', $cutoff)
-                                ->orWhere(function ($s2) use ($cutoff) {
-                                    $s2->whereNull('date_requested')
-                                        ->where('created_at', '<=', $cutoff);
-                                });
-                        });
+                    $d->whereIn('ticket_status', ['Pending', 'In Progress'])
+                        ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$cutoff]);
                 });
             })
             ->when($preset === 'awaiting_rating', function ($q) {
@@ -444,6 +440,8 @@ class TicketV2Controller extends Controller
                 'ticket_remarks' => $request->input('ticket_remarks') ?? '',
                 'ticket_status' => 'Completed',
                 'date_requested' => $dateRequested,
+                'date_assigned' => $dateRequested,
+                'date_attended' => $dateRequested,
                 'date_completed' => $dateCompleted,
             ]);
 
@@ -851,6 +849,8 @@ class TicketV2Controller extends Controller
                     'ticket_actions_taken',
                     'ticket_remarks',
                     'date_requested',
+                    'date_assigned',
+                    'date_attended',
                     'date_completed',
                     'created_at',
                 ])->with(['event' => function ($e) {
@@ -1138,7 +1138,10 @@ class TicketV2Controller extends Controller
                 'Client Name',
                 'Division/Agency',
                 'Date Requested',
+                'Date Assigned',
+                'Date Attended',
                 'Date Completed',
+                'Response Time (Assigned to Attended)',
                 'Turnaround Time (TAT)',
                 'Status',
                 'Request Type',
@@ -1156,26 +1159,28 @@ class TicketV2Controller extends Controller
                 $detail = $ticket->detail;
                 $rating = $ticket->rating;
 
-                $tat = '—';
-                if ($detail?->date_requested && $detail?->date_completed) {
-                    $start = \Illuminate\Support\Carbon::parse($detail->date_requested);
-                    $end = \Illuminate\Support\Carbon::parse($detail->date_completed);
-                    $totalHours = $start->diffInHours($end);
-                    if ($totalHours < 24) {
-                        $tat = $totalHours.'h';
-                    } else {
-                        $days = floor($totalHours / 24);
-                        $remHours = $totalHours % 24;
-                        $tat = "{$days}d {$remHours}h";
-                    }
-                }
+                $sla = \App\Services\TicketSlaService::calculate(
+                    $detail?->date_requested,
+                    $detail?->ticket_status,
+                    $detail?->date_completed,
+                    $detail?->date_assigned,
+                    $detail?->date_attended,
+                );
+
+                $responseTime = $sla['response_duration'] ?? '—';
+                $tat = ($detail?->date_completed && $sla['type'] === 'tat')
+                    ? $sla['formatted_duration']
+                    : '—';
 
                 fputcsv($out, [
                     $ticket->client_referenceNo,
                     $ticket->client_name,
                     $ticket->client_division_agency,
                     $detail?->date_requested ? \Illuminate\Support\Carbon::parse($detail->date_requested)->format('Y-m-d H:i') : ($ticket->created_at ? $ticket->created_at->format('Y-m-d H:i') : ''),
+                    $detail?->date_assigned ? \Illuminate\Support\Carbon::parse($detail->date_assigned)->format('Y-m-d H:i') : '',
+                    $detail?->date_attended ? \Illuminate\Support\Carbon::parse($detail->date_attended)->format('Y-m-d H:i') : '',
                     $detail?->date_completed ? \Illuminate\Support\Carbon::parse($detail->date_completed)->format('Y-m-d H:i') : '',
+                    $responseTime,
                     $tat,
                     $detail?->ticket_status ?? 'New',
                     $detail?->ticket_type ?? '',
@@ -1221,6 +1226,7 @@ class TicketV2Controller extends Controller
                 ->orWhereIn('client_referenceNo', $validated['ticket_ids'])
                 ->get();
 
+            $now = now();
             foreach ($details as $detail) {
                 $updates = [
                     'ticket_assigned_staff' => $staff,
@@ -1228,6 +1234,7 @@ class TicketV2Controller extends Controller
                         ? TicketStatus::Pending->value
                         : $detail->ticket_status,
                     'ticket_assigned_by' => $assignedBy,
+                    'date_assigned' => $now,
                 ];
                 if ($type) {
                     $updates['ticket_type'] = $type;
@@ -1814,7 +1821,7 @@ class TicketV2Controller extends Controller
             SUM(CASE WHEN d.ticket_status = 'Completed' THEN 1 ELSE 0 END)    as completed_count,
             SUM(CASE WHEN d.ticket_status = 'Cancelled' THEN 1 ELSE 0 END)    as cancelled_count,
             SUM(CASE WHEN d.ticket_status = 'Closed' THEN 1 ELSE 0 END)       as closed_count,
-            SUM(CASE WHEN d.ticket_status IN ('New', 'Pending', 'In Progress') AND (d.date_requested <= ? OR (d.date_requested IS NULL AND d.created_at <= ?)) THEN 1 ELSE 0 END) as overdue_count,
+            SUM(CASE WHEN d.ticket_status IN ('Pending', 'In Progress') AND COALESCE(d.date_attended, d.date_assigned, d.date_requested, d.created_at) <= ? THEN 1 ELSE 0 END) as overdue_count,
             SUM(CASE WHEN d.ticket_status = 'New' OR d.ticket_assigned_staff IS NULL OR TRIM(d.ticket_assigned_staff) = '' THEN 1 ELSE 0 END) as unassigned_count
         ";
 
@@ -1822,14 +1829,14 @@ class TicketV2Controller extends Controller
             $countsRow = (clone $base)
                 ->selectRaw(
                     $countsSelect.', SUM(CASE WHEN d.ticket_assigned_staff = ? OR d.ticket_assisted_by LIKE ? THEN 1 ELSE 0 END) as assigned_to_me_count',
-                    [$cutoff, $cutoff, $currentUserName, "%{$currentUserName}%"]
+                    [$cutoff, $currentUserName, "%{$currentUserName}%"]
                 )
                 ->first();
         } else {
             $countsRow = (clone $base)
                 ->selectRaw(
                     $countsSelect.', 0 as assigned_to_me_count',
-                    [$cutoff, $cutoff]
+                    [$cutoff]
                 )
                 ->first();
         }

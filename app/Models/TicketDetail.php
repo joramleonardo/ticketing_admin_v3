@@ -33,6 +33,8 @@ class TicketDetail extends Model
         'ticket_actions_taken',
         'ticket_remarks',
         'date_requested',
+        'date_assigned',
+        'date_attended',
         'date_completed',
     ];
 

@@ -16,6 +16,7 @@ use App\Services\StaffService;
 use App\Services\TicketNotificationService;
 use App\Support\TicketClassification;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,7 +28,7 @@ use Inertia\Inertia;
 class TicketStatusController extends Controller
 {
     /** Complete (In Progress -> Completed) */
-    public function complete(Request $request, int|string $id): RedirectResponse
+    public function complete(Request $request, int|string $id): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'ticket_status' => ['required', Rule::in([TicketStatus::Completed->value])],
@@ -52,6 +53,7 @@ class TicketStatusController extends Controller
                 abort(422, 'Only tickets In Progress can be marked as completed.');
             }
 
+            $now = now();
             $updateData = array_filter([
                 'ticket_status' => TicketStatus::Completed->value,
                 'ticket_type' => $validated['ticket_type'] ?? null,
@@ -61,7 +63,9 @@ class TicketStatusController extends Controller
                 'ticket_assisted_by' => $validated['ticket_assisted_by'] ?? null,
                 'ticket_actions_taken' => $validated['ticket_actions_taken'] ?? null,
                 'ticket_remarks' => $validated['ticket_remarks'] ?? null,
-                'date_completed' => now(),
+                'date_assigned' => $detail->date_assigned ?? $detail->date_attended ?? $detail->date_requested ?? $now,
+                'date_attended' => $detail->date_attended ?? $detail->date_assigned ?? $detail->date_requested ?? $now,
+                'date_completed' => $now,
             ], fn ($v) => ! is_null($v));
 
             if (empty($detail->ticket_attended_by) && auth()->check()) {
@@ -117,6 +121,13 @@ class TicketStatusController extends Controller
         $successMsg = $emailSent
             ? 'Ticket completed successfully and client notified via email!'
             : 'Ticket completed successfully!';
+
+        if ($request->boolean('json')) {
+            return response()->json([
+                'success' => true,
+                'message' => $successMsg,
+            ]);
+        }
 
         return back()->with('success', $successMsg);
     }
@@ -234,6 +245,7 @@ class TicketStatusController extends Controller
             'event_end_date' => ['sometimes', 'nullable', 'date'],
             'event_venue' => ['nullable', 'string', 'max:255'],
             'event_remarks' => ['sometimes', 'nullable', 'string'],
+            'other_request' => ['sometimes', 'nullable', 'string'],
         ]);
 
         $fields = [
@@ -266,12 +278,7 @@ class TicketStatusController extends Controller
         $effectiveStatus = $incomingStatus ?: $detail->ticket_status;
         $incomingAssigned = $updateData['ticket_assigned_staff'] ?? null;
         $currentAssigned = $detail->ticket_assigned_staff;
-
-        if (strcasecmp($effectiveStatus, 'In Progress') === 0) {
-            $updateData['ticket_attended_by'] = $request->exists('ticket_assigned_staff')
-                ? $incomingAssigned
-                : $currentAssigned;
-        }
+        $now = now();
 
         if ($request->exists('ticket_assigned_staff')) {
             $user = auth()->user();
@@ -280,6 +287,23 @@ class TicketStatusController extends Controller
             }
             $updateData['ticket_assigned_by'] = $user?->name ?? 'System';
             $updateData['ticket_assigned_by_id'] = $user?->id ?? null; // if column exists
+
+            if (! empty($incomingAssigned) && ($incomingAssigned !== $currentAssigned || empty($detail->date_assigned))) {
+                $updateData['date_assigned'] = $now;
+            }
+        }
+
+        if (strcasecmp($effectiveStatus, 'In Progress') === 0) {
+            $updateData['ticket_attended_by'] = $request->exists('ticket_assigned_staff')
+                ? $incomingAssigned
+                : $currentAssigned;
+
+            if (empty($detail->date_attended)) {
+                $updateData['date_attended'] = $now;
+            }
+            if (empty($detail->date_assigned) && empty($updateData['date_assigned'])) {
+                $updateData['date_assigned'] = $now;
+            }
         }
 
         $staffAssignedChanged = false;
@@ -313,26 +337,23 @@ class TicketStatusController extends Controller
                 ]);
             }
 
-            // 2) If ticket_type is Events, validate & upsert v2_ticket_events
-            $isEvents = false;
-            if (array_key_exists('ticket_type', $updateData) && $updateData['ticket_type']) {
-                $isEvents = (strcasecmp($updateData['ticket_type'], 'Events') === 0);
-            } else {
-                // If type wasn’t sent this time, look at current (post-save) value
-                $isEvents = (strcasecmp($detail->ticket_type ?? '', 'Events') === 0);
-            }
+            // 2) If ticket_type is Events or event data is submitted, validate & upsert v2_ticket_events
+            $hasEventData = $request->has('event_start_date')
+                || $request->has('event_end_date')
+                || $request->has('event_venue')
+                || $request->has('event_remarks')
+                || $request->has('other_request');
+
+            $isEvents = (strcasecmp($detail->ticket_type ?? '', 'Events') === 0)
+                || (strcasecmp($detail->ticket_nature_of_support ?? '', 'Events') === 0)
+                || (strcasecmp($detail->ticket_support_type ?? '', 'Events') === 0)
+                || $hasEventData;
 
             if ($isEvents) {
                 if (empty($detail->ticket_nature_of_support)) {
                     $detail->ticket_nature_of_support = 'Events';
                     $detail->save();
                 }
-
-                $hasEventData = $request->has('event_start_date')
-                    || $request->has('event_end_date')
-                    || $request->has('event_venue')
-                    || $request->has('event_remarks')
-                    || $request->has('other_request');
 
                 if ($hasEventData) {
                     $eventData = $request->validate([
@@ -366,6 +387,15 @@ class TicketStatusController extends Controller
                         ['client_referenceNo' => $clientRef],
                         $eventAttributes
                     );
+
+                    if (empty($dirty)) {
+                        TicketActivityLog::create([
+                            'client_referenceNo' => $detail->client_referenceNo,
+                            'activity_name' => 'Event Schedule Updated',
+                            'activity_date' => now(),
+                            'activity_user' => auth()->user()?->name ?? 'System',
+                        ]);
+                    }
                 }
             }
         });
@@ -438,7 +468,7 @@ class TicketStatusController extends Controller
         return back()->with('success', 'Ticket updated successfully.');
     }
 
-    public function attend(Request $request, int|string $id): RedirectResponse
+    public function attend(Request $request, int|string $id): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'ticket_status' => ['nullable', Rule::in(TicketStatus::values())],
@@ -446,22 +476,25 @@ class TicketStatusController extends Controller
 
         // Find ticket detail
         $detail = TicketDetail::findOrFail($id);
+        $now = Carbon::now();
 
         // Build the update payload
         $update = [];
 
         // ✅ Update the status
         if (! empty($validated['ticket_status'])) {
-            $detail->update([
-                'ticket_status' => $validated['ticket_status'],
-            ]);
+            $update['ticket_status'] = $validated['ticket_status'];
         }
 
         // ✅ Authoritative server-side set
         $staffName = auth()->user()?->name ?? 'IT Support Staff';
         $update['ticket_attended_by'] = $staffName;
-        // (optional) if you track timestamp:
-        // $update['ticket_attended_at'] = now();
+        if (empty($detail->date_assigned)) {
+            $update['date_assigned'] = $now;
+        }
+        if (empty($detail->date_attended)) {
+            $update['date_attended'] = $now;
+        }
 
         $detail->update($update);
 
@@ -469,7 +502,7 @@ class TicketStatusController extends Controller
         TicketActivityLog::create([
             'client_referenceNo' => $detail->client_referenceNo,
             'activity_name' => 'Ticket Attended',
-            'activity_date' => Carbon::now(), // instead of Carbon::today()
+            'activity_date' => $now,
             'activity_user' => $staffName,
         ]);
 
@@ -480,6 +513,13 @@ class TicketStatusController extends Controller
         $successMsg = $emailSent
             ? 'Ticket attended successfully and client notified via email!'
             : 'Ticket attended successfully and now in progress!';
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => $successMsg,
+            ]);
+        }
 
         return back()->with('success', $successMsg);
     }
@@ -532,6 +572,7 @@ class TicketStatusController extends Controller
         $refNo = DB::transaction(function () use ($validated, $actorName, $assignedStaff, $attendedBy, $isEvents, $problem, $request) {
             // 1) Generate new reference number (YYYYMMDD-###)
             $refNo = $this->generateClientReferenceNo();
+            $now = Carbon::now();
 
             // 2) Client details
             TicketClientDetail::create([
@@ -553,7 +594,9 @@ class TicketStatusController extends Controller
                 'ticket_attended_by' => $attendedBy,
                 'ticket_status' => 'In Progress',
                 'ticket_problem_that_needed_support' => $problem,
-                'date_requested' => Carbon::now(),
+                'date_requested' => $now,
+                'date_assigned' => $now,
+                'date_attended' => $now,
             ]);
 
             // 3.5) Event details if Events

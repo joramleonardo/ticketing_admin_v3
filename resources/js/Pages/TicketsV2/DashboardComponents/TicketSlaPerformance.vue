@@ -67,26 +67,47 @@
         </div>
       </div>
 
-      <!-- 2. Average Turnaround Time (TAT) -->
+      <!-- 2. Average Turnaround Time (TAT) & Response Time -->
       <div class="flex items-center gap-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
         <div class="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold shrink-0">
           <i class="fas fa-bolt text-lg"></i>
         </div>
-        <div>
-          <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Average Turnaround</div>
-          <div class="text-xl font-black text-slate-800 tracking-tight mt-0.5">
-            {{ slaStats.avg_tat_formatted || '0 hrs' }}
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Avg Resolution TAT</div>
+              <div class="text-xl font-black text-slate-800 tracking-tight mt-0.5">
+                {{ slaStats.avg_tat_formatted || '—' }}
+              </div>
+            </div>
+            <div class="pl-3 border-l border-slate-100">
+              <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Avg Response</div>
+              <div class="text-sm font-black text-indigo-600 tracking-tight mt-0.5">
+                {{ slaStats.avg_response_formatted || '—' }}
+              </div>
+            </div>
           </div>
-          <div class="text-xs text-slate-500 mt-0.5">
-            Average time from submission to delivery
+          <div class="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span><strong class="text-slate-600">TAT:</strong> Attended &rarr; Completed</span>
+            <span class="text-slate-300">&bull;</span>
+            <span><strong class="text-slate-600">Resp:</strong> Assigned &rarr; Attended</span>
           </div>
         </div>
       </div>
 
       <!-- 3. Active Workload Status (Interactive Drilldown Chips) -->
       <div class="border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6 space-y-2">
-        <div class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-          Active Workload Health ({{ slaStats.active_total }} Total)
+        <div class="flex items-center justify-between gap-2 mb-1.5">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-400">
+            Active Assigned Workload ({{ slaStats.active_total }} Total)
+          </span>
+          <span
+            v-if="slaStats.awaiting_assignment > 0"
+            class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
+            title="New unassigned tickets do not count against technician SLA until assigned"
+          >
+            {{ slaStats.awaiting_assignment }} Unassigned
+          </span>
         </div>
 
         <div class="grid grid-cols-3 gap-2">
@@ -138,15 +159,18 @@ const props = defineProps({
     type: Object,
     default: () => ({
       compliance_rate: 100,
-      avg_tat_formatted: '0 hrs',
+      avg_tat_formatted: '—',
       avg_tat_hours: 0,
+      avg_response_formatted: '—',
+      avg_response_hours: 0,
       resolved_total: 0,
       resolved_within_sla: 0,
       resolved_overdue: 0,
       active_total: 0,
       active_on_track: 0,
       active_warning: 0,
-      active_breached: 0
+      active_breached: 0,
+      awaiting_assignment: 0
     })
   },
   filters: {

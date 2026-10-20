@@ -132,6 +132,8 @@ class MyTicketsController extends Controller
                     'ticket_actions_taken',
                     'ticket_remarks',
                     'date_requested',
+                    'date_assigned',
+                    'date_attended',
                     'date_completed',
                     'created_at',
                 ])
@@ -180,24 +182,14 @@ class MyTicketsController extends Controller
                 $cutoff = now()->subHours(48)->toDateTimeString();
                 $q->whereHas('detail', function ($d) use ($cutoff) {
                     $d->whereIn('ticket_status', ['Pending', 'In Progress'])
-                        ->where(function ($sub) use ($cutoff) {
-                            $sub->where('date_requested', '<=', $cutoff)
-                                ->orWhere(function ($s2) use ($cutoff) {
-                                    $s2->whereNull('date_requested')->where('created_at', '<=', $cutoff);
-                                });
-                        });
+                        ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$cutoff]);
                 });
             })
             ->when($preset === 'overdue', function ($q) {
                 $cutoff = now()->subHours(72)->toDateTimeString();
                 $q->whereHas('detail', function ($d) use ($cutoff) {
                     $d->whereIn('ticket_status', ['Pending', 'In Progress'])
-                        ->where(function ($sub) use ($cutoff) {
-                            $sub->where('date_requested', '<=', $cutoff)
-                                ->orWhere(function ($s2) use ($cutoff) {
-                                    $s2->whereNull('date_requested')->where('created_at', '<=', $cutoff);
-                                });
-                        });
+                        ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$cutoff]);
                 });
             })
             ->when($preset === 'awaiting_rating', function ($q) {
@@ -298,6 +290,8 @@ class MyTicketsController extends Controller
             'd.ticket_actions_taken',
             'd.ticket_remarks',
             'd.date_requested',
+            'd.date_assigned',
+            'd.date_attended',
             'd.date_completed',
             'd.created_at',
             'd.updated_at',
@@ -323,6 +317,8 @@ class MyTicketsController extends Controller
                 'ticket_actions_taken' => $t->ticket_actions_taken ?? null,
                 'ticket_remarks' => $t->ticket_remarks ?? null,
                 'date_requested' => $t->date_requested ?? null,
+                'date_assigned' => $t->date_assigned ?? null,
+                'date_attended' => $t->date_attended ?? null,
                 'date_completed' => $t->date_completed ?? null,
                 'created_at' => $t->created_at ?? null,
                 'updated_at' => $t->updated_at ?? null,
@@ -417,23 +413,13 @@ class MyTicketsController extends Controller
         $needsAttentionCount = DB::table('v2_ticket_details')
             ->where('ticket_assigned_staff', $assignedValue)
             ->whereIn('ticket_status', ['Pending', 'In Progress'])
-            ->where(function ($sub) use ($warningCutoff) {
-                $sub->where('date_requested', '<=', $warningCutoff)
-                    ->orWhere(function ($s2) use ($warningCutoff) {
-                        $s2->whereNull('date_requested')->where('created_at', '<=', $warningCutoff);
-                    });
-            })
+            ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$warningCutoff])
             ->count();
 
         $overdueCount = DB::table('v2_ticket_details')
             ->where('ticket_assigned_staff', $assignedValue)
             ->whereIn('ticket_status', ['Pending', 'In Progress'])
-            ->where(function ($sub) use ($breachCutoff) {
-                $sub->where('date_requested', '<=', $breachCutoff)
-                    ->orWhere(function ($s2) use ($breachCutoff) {
-                        $s2->whereNull('date_requested')->where('created_at', '<=', $breachCutoff);
-                    });
-            })
+            ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$breachCutoff])
             ->count();
 
         $completedTodayCount = DB::table('v2_ticket_details')
@@ -630,24 +616,14 @@ class MyTicketsController extends Controller
                 $cutoff = now()->subHours(48)->toDateTimeString();
                 $q->whereHas('detail', function ($d) use ($cutoff) {
                     $d->whereIn('ticket_status', ['Pending', 'In Progress'])
-                        ->where(function ($sub) use ($cutoff) {
-                            $sub->where('date_requested', '<=', $cutoff)
-                                ->orWhere(function ($s2) use ($cutoff) {
-                                    $s2->whereNull('date_requested')->where('created_at', '<=', $cutoff);
-                                });
-                        });
+                        ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$cutoff]);
                 });
             })
             ->when($preset === 'overdue', function ($q) {
                 $cutoff = now()->subHours(72)->toDateTimeString();
                 $q->whereHas('detail', function ($d) use ($cutoff) {
                     $d->whereIn('ticket_status', ['Pending', 'In Progress'])
-                        ->where(function ($sub) use ($cutoff) {
-                            $sub->where('date_requested', '<=', $cutoff)
-                                ->orWhere(function ($s2) use ($cutoff) {
-                                    $s2->whereNull('date_requested')->where('created_at', '<=', $cutoff);
-                                });
-                        });
+                        ->whereRaw('COALESCE(date_attended, date_assigned, date_requested, created_at) <= ?', [$cutoff]);
                 });
             })
             ->when($preset === 'awaiting_rating', function ($q) {
@@ -696,7 +672,10 @@ class MyTicketsController extends Controller
                 'Division/Agency',
                 'Client Type',
                 'Date Requested',
+                'Date Assigned',
+                'Date Attended',
                 'Date Completed',
+                'Response Time (Assigned to Attended)',
                 'Turnaround Time (TAT)',
                 'Status',
                 'Request Type',
@@ -714,19 +693,16 @@ class MyTicketsController extends Controller
                 $detail = $ticket->detail;
                 $rating = $ticket->rating;
 
-                $tat = '—';
-                if ($detail?->date_requested && $detail?->date_completed) {
-                    $start = \Illuminate\Support\Carbon::parse($detail->date_requested);
-                    $end = \Illuminate\Support\Carbon::parse($detail->date_completed);
-                    $totalHours = $start->diffInHours($end);
-                    if ($totalHours < 24) {
-                        $tat = $totalHours.'h';
-                    } else {
-                        $days = floor($totalHours / 24);
-                        $remHours = $totalHours % 24;
-                        $tat = "{$days}d {$remHours}h";
-                    }
-                }
+                $sla = \App\Services\TicketSlaService::calculate(
+                    $detail?->date_requested ?? $ticket->created_at,
+                    $detail?->ticket_status ?? 'New',
+                    $detail?->date_completed,
+                    $detail?->date_assigned,
+                    $detail?->date_attended
+                );
+
+                $tat = in_array($detail?->ticket_status, ['Completed', 'Closed'], true) ? $sla['formatted_duration'] : '—';
+                $responseTime = $sla['response_duration'] ?? '—';
 
                 fputcsv($out, [
                     $ticket->client_referenceNo,
@@ -734,7 +710,10 @@ class MyTicketsController extends Controller
                     $ticket->client_division_agency,
                     $ticket->client_type ?? '',
                     $detail?->date_requested ? \Illuminate\Support\Carbon::parse($detail->date_requested)->format('Y-m-d H:i') : ($ticket->created_at ? $ticket->created_at->format('Y-m-d H:i') : ''),
+                    $detail?->date_assigned ? \Illuminate\Support\Carbon::parse($detail->date_assigned)->format('Y-m-d H:i') : '',
+                    $detail?->date_attended ? \Illuminate\Support\Carbon::parse($detail->date_attended)->format('Y-m-d H:i') : '',
                     $detail?->date_completed ? \Illuminate\Support\Carbon::parse($detail->date_completed)->format('Y-m-d H:i') : '',
+                    $responseTime,
                     $tat,
                     $detail?->ticket_status ?? 'New',
                     $detail?->ticket_type ?? '',

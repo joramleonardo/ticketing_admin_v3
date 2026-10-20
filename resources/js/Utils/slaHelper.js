@@ -1,5 +1,5 @@
 /**
- * SLA & Turnaround Time (TAT) Calculation Helper
+ * SLA, Response Time (Assigned -> Attended), and Resolution Turnaround Time (TAT: Attended -> Completed) Helper
  *
  * Target SLA: 24 Hours
  * Warning SLA: 48 Hours
@@ -52,6 +52,9 @@ export function getTicketSlaStatus(ticket) {
             dotClass: 'bg-gray-400',
             elapsedHours: 0,
             formattedDuration: '—',
+            responseHours: null,
+            responseFormatted: null,
+            tooltip: 'No ticket data available',
             isBreached: false,
             isWarning: false,
         }
@@ -59,33 +62,77 @@ export function getTicketSlaStatus(ticket) {
 
     const detail = ticket.detail || ticket
     const status = (detail.ticket_status || ticket.ticket_status || '').trim()
+    const assignedStaff = (detail.ticket_assigned_staff || ticket.ticket_assigned_staff || '').trim()
 
     const rawReq = detail.date_requested || ticket.date_requested || detail.created_at || ticket.created_at
-    const start = parseDate(rawReq)
+    const rawAssigned = detail.date_assigned || ticket.date_assigned
+    const rawAttended = detail.date_attended || ticket.date_attended || detail.ticket_attended_at || ticket.ticket_attended_at
+    const rawCompleted = detail.date_completed || ticket.date_completed || detail.updated_at || ticket.updated_at
 
-    if (!start) {
+    const requestedDate = parseDate(rawReq)
+    const assignedDate = parseDate(rawAssigned) || (assignedStaff || status !== 'New' ? requestedDate : null)
+    const attendedDate = parseDate(rawAttended)
+
+    // 1. Unassigned / New ticket: SLA & TAT clock has not started yet
+    if (
+        (status.toLowerCase() === 'new' || (!assignedStaff && !['in progress', 'completed', 'closed'].includes(status.toLowerCase()))) &&
+        !parseDate(rawAssigned) &&
+        !attendedDate
+    ) {
         return {
-            type: 'unknown',
-            state: 'unknown',
-            label: 'No Date',
-            badgeClass: 'bg-gray-100 text-gray-500 border-gray-200',
-            dotClass: 'bg-gray-400',
+            type: 'unassigned',
+            state: 'awaiting_assignment',
+            label: 'Awaiting Assignment',
+            badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+            dotClass: 'bg-slate-400',
             elapsedHours: 0,
             formattedDuration: '—',
+            responseHours: null,
+            responseFormatted: null,
+            tooltip: 'SLA & TAT start once the ticket is assigned and attended by IT Staff',
             isBreached: false,
             isWarning: false,
         }
     }
 
+    // Calculate Response Time (Assigned -> Attended) when both exist
+    let responseHours = null
+    let responseFormatted = null
+    if (assignedDate && attendedDate) {
+        const respMins = Math.max(0, (attendedDate.getTime() - assignedDate.getTime()) / (1000 * 60))
+        responseHours = Math.round((respMins / 60) * 10) / 10
+        responseFormatted = formatDuration(respMins)
+    }
+
     const isResolved = status === 'Completed' || status === 'Closed'
 
+    // 2. Resolved Ticket (Completed / Closed): TAT = Attended -> Completed
     if (isResolved) {
-        const rawComp = detail.date_completed || ticket.date_completed || detail.updated_at || ticket.updated_at
-        const end = parseDate(rawComp) || new Date()
-        const diffMinutes = Math.max(0, (end.getTime() - start.getTime()) / (1000 * 60))
+        const tatStart = attendedDate || assignedDate || requestedDate
+        if (!tatStart) {
+            return {
+                type: 'unknown',
+                state: 'unknown',
+                label: 'No Date',
+                badgeClass: 'bg-gray-100 text-gray-500 border-gray-200',
+                dotClass: 'bg-gray-400',
+                elapsedHours: 0,
+                formattedDuration: '—',
+                responseHours,
+                responseFormatted,
+                tooltip: 'Missing timestamp',
+                isBreached: false,
+                isWarning: false,
+            }
+        }
+
+        const end = parseDate(rawCompleted) || new Date()
+        const diffMinutes = Math.max(0, (end.getTime() - tatStart.getTime()) / (1000 * 60))
         const diffHours = Math.round((diffMinutes / 60) * 10) / 10
         const formatted = formatDuration(diffMinutes)
         const isBreached = diffMinutes > 24 * 60
+
+        const respNote = responseFormatted ? ` • Response Time (Assigned → Attended): ${responseFormatted}` : ''
 
         return {
             type: 'tat',
@@ -97,16 +144,113 @@ export function getTicketSlaStatus(ticket) {
             dotClass: isBreached ? 'bg-amber-500' : 'bg-emerald-500',
             elapsedHours: diffHours,
             formattedDuration: formatted,
+            responseHours,
+            responseFormatted,
+            tooltip: `Resolution TAT (Attended → Completed): ${formatted}${respNote}`,
             isBreached,
             isWarning: false,
         }
     }
 
-    // Active Ticket (New, Pending, In Progress)
+    // 3. Pending Ticket (Assigned to IT Staff, waiting to be Attended): Response Time Clock
+    if (status.toLowerCase() === 'pending' && !attendedDate) {
+        const respStart = assignedDate || requestedDate
+        if (!respStart) {
+            return {
+                type: 'unknown',
+                state: 'unknown',
+                label: 'No Date',
+                badgeClass: 'bg-gray-100 text-gray-500 border-gray-200',
+                dotClass: 'bg-gray-400',
+                elapsedHours: 0,
+                formattedDuration: '—',
+                responseHours: null,
+                responseFormatted: null,
+                tooltip: 'Missing assignment date',
+                isBreached: false,
+                isWarning: false,
+            }
+        }
+
+        const now = new Date()
+        const diffMinutes = Math.max(0, (now.getTime() - respStart.getTime()) / (1000 * 60))
+        const diffHours = Math.round((diffMinutes / 60) * 10) / 10
+        const formatted = formatDuration(diffMinutes)
+
+        if (diffMinutes > 48 * 60) {
+            return {
+                type: 'response',
+                state: 'breached',
+                label: `Unattended (${formatted})`,
+                badgeClass: 'bg-rose-50 text-rose-800 border-rose-300 animate-pulse',
+                dotClass: 'bg-rose-600',
+                elapsedHours: diffHours,
+                formattedDuration: formatted,
+                responseHours: diffHours,
+                responseFormatted: formatted,
+                tooltip: `Assigned ${formatted} ago — awaiting technician attendance`,
+                isBreached: true,
+                isWarning: false,
+            }
+        }
+
+        if (diffMinutes > 24 * 60) {
+            return {
+                type: 'response',
+                state: 'warning',
+                label: `Due Soon (${formatted})`,
+                badgeClass: 'bg-amber-50 text-amber-800 border-amber-300',
+                dotClass: 'bg-amber-500',
+                elapsedHours: diffHours,
+                formattedDuration: formatted,
+                responseHours: diffHours,
+                responseFormatted: formatted,
+                tooltip: `Assigned ${formatted} ago — awaiting technician attendance`,
+                isBreached: false,
+                isWarning: true,
+            }
+        }
+
+        return {
+            type: 'response',
+            state: 'awaiting_attendance',
+            label: `Awaiting Attend (${formatted})`,
+            badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+            dotClass: 'bg-indigo-500',
+            elapsedHours: diffHours,
+            formattedDuration: formatted,
+            responseHours: diffHours,
+            responseFormatted: formatted,
+            tooltip: `Assigned ${formatted} ago — Resolution TAT starts when Attended`,
+            isBreached: false,
+            isWarning: false,
+        }
+    }
+
+    // 4. Active In-Progress Ticket (Attended -> Now): Resolution SLA Clock
+    const activeStart = attendedDate || assignedDate || requestedDate
+    if (!activeStart) {
+        return {
+            type: 'unknown',
+            state: 'unknown',
+            label: 'No Date',
+            badgeClass: 'bg-gray-100 text-gray-500 border-gray-200',
+            dotClass: 'bg-gray-400',
+            elapsedHours: 0,
+            formattedDuration: '—',
+            responseHours,
+            responseFormatted,
+            tooltip: 'Missing attendance date',
+            isBreached: false,
+            isWarning: false,
+        }
+    }
+
     const now = new Date()
-    const diffMinutes = Math.max(0, (now.getTime() - start.getTime()) / (1000 * 60))
+    const diffMinutes = Math.max(0, (now.getTime() - activeStart.getTime()) / (1000 * 60))
     const diffHours = Math.round((diffMinutes / 60) * 10) / 10
     const formatted = formatDuration(diffMinutes)
+    const respNote = responseFormatted ? ` • Response Time (Assigned → Attended): ${responseFormatted}` : ''
 
     if (diffMinutes > 48 * 60) {
         return {
@@ -117,6 +261,9 @@ export function getTicketSlaStatus(ticket) {
             dotClass: 'bg-rose-600',
             elapsedHours: diffHours,
             formattedDuration: formatted,
+            responseHours,
+            responseFormatted,
+            tooltip: `Active Resolution Time (since Attended): ${formatted} (>48h SLA)${respNote}`,
             isBreached: true,
             isWarning: false,
         }
@@ -131,6 +278,9 @@ export function getTicketSlaStatus(ticket) {
             dotClass: 'bg-amber-500',
             elapsedHours: diffHours,
             formattedDuration: formatted,
+            responseHours,
+            responseFormatted,
+            tooltip: `Active Resolution Time (since Attended): ${formatted} (24h–48h SLA)${respNote}`,
             isBreached: false,
             isWarning: true,
         }
@@ -144,8 +294,10 @@ export function getTicketSlaStatus(ticket) {
         dotClass: 'bg-sky-500',
         elapsedHours: diffHours,
         formattedDuration: formatted,
+        responseHours,
+        responseFormatted,
+        tooltip: `Active Resolution Time (since Attended): ${formatted} (Within 24h SLA)${respNote}`,
         isBreached: false,
         isWarning: false,
     }
 }
-

@@ -12,6 +12,15 @@ use Inertia\Response;
 
 class TicketEventController extends Controller
 {
+    public const STANDARD_VENUES = [
+        'DOST-STII Atrium',
+        'Cast Room',
+        'Training Room',
+        'Conference Room',
+        'Mini Theater',
+        'Zoom / Online',
+    ];
+
     /**
      * Display the events calendar monitoring workspace.
      */
@@ -26,8 +35,10 @@ class TicketEventController extends Controller
         $division = trim((string) $request->input('division', 'All'));
         $search = trim((string) $request->input('search', ''));
         $staff = trim((string) $request->input('staff', 'All'));
+        $venue = trim((string) $request->input('venue', 'All'));
+        $customVenue = trim((string) $request->input('custom_venue', ''));
         $view = trim((string) $request->input('view', 'month'));
-        if (! in_array($view, ['month', 'week', 'agenda'], true)) {
+        if (! in_array($view, ['month', 'week', 'agenda', 'venues'], true)) {
             $view = 'month';
         }
 
@@ -48,9 +59,11 @@ class TicketEventController extends Controller
                 'division' => $division,
                 'search' => $search,
                 'staff' => $staff,
+                'venue' => $venue,
+                'custom_venue' => $customVenue,
                 'view' => $view,
             ],
-            'activeStaff' => app(StaffService::class)->getActiveStaff(),
+            'activeStaff' => app(StaffService::class)->getActiveStaffNames(),
         ];
 
         if ($request->wantsJson() || $request->query('format') === 'json') {
@@ -92,6 +105,8 @@ class TicketEventController extends Controller
         $division = trim((string) $request->input('division', ''));
         $search = trim((string) $request->input('search', ''));
         $staff = trim((string) $request->input('staff', ''));
+        $venue = trim((string) $request->input('venue', ''));
+        $customVenue = trim((string) $request->input('custom_venue', ''));
 
         $DIVISION_MAP = [
             '1' => 'FAD',
@@ -129,10 +144,22 @@ class TicketEventController extends Controller
 
         // Staff filter
         if ($staff !== '' && strcasecmp($staff, 'All') !== 0) {
-            $query->whereHas('detail', function ($d) use ($staff): void {
-                $d->where('ticket_assigned_staff', $staff)
-                    ->orWhere('ticket_attended_by', $staff);
-            });
+            if (strcasecmp($staff, 'Unassigned') === 0) {
+                $query->whereHas('detail', function ($d): void {
+                    $d->where(function ($sub): void {
+                        $sub->whereNull('ticket_assigned_staff')
+                            ->orWhere('ticket_assigned_staff', '');
+                    })->where(function ($sub): void {
+                        $sub->whereNull('ticket_attended_by')
+                            ->orWhere('ticket_attended_by', '');
+                    });
+                });
+            } else {
+                $query->whereHas('detail', function ($d) use ($staff): void {
+                    $d->where('ticket_assigned_staff', $staff)
+                        ->orWhere('ticket_attended_by', $staff);
+                });
+            }
         }
 
         // Division filter
@@ -148,6 +175,28 @@ class TicketEventController extends Controller
                 $query->where(function ($q) use ($division, $label): void {
                     $q->where('client_division_agency', $division)
                         ->orWhere('client_division_agency', $label);
+                });
+            }
+        }
+
+        // Venue filter (Supports Standard Venues + 'Others' with optional custom_venue search)
+        if ($venue !== '' && strcasecmp($venue, 'All') !== 0) {
+            if (strcasecmp($venue, 'Others') === 0) {
+                if ($customVenue !== '') {
+                    $venueTerm = '%'.$customVenue.'%';
+                    $query->whereHas('event', function ($eq) use ($venueTerm): void {
+                        $eq->where('event_venue', 'like', $venueTerm);
+                    });
+                } else {
+                    $query->whereHas('event', function ($eq): void {
+                        $eq->whereNotNull('event_venue')
+                            ->where('event_venue', '!=', '')
+                            ->whereNotIn('event_venue', self::STANDARD_VENUES);
+                    });
+                }
+            } else {
+                $query->whereHas('event', function ($eq) use ($venue): void {
+                    $eq->where('event_venue', $venue);
                 });
             }
         }
@@ -177,7 +226,7 @@ class TicketEventController extends Controller
     }
 
     /**
-     * Transform raw tickets into rich calendar event payloads.
+     * Transform raw tickets into rich calendar event payloads with Venue & Staff conflict detection.
      */
     protected function transformEvents($tickets)
     {
@@ -188,7 +237,10 @@ class TicketEventController extends Controller
             '4' => 'OD-MISPS',
         ];
 
-        return $tickets->map(function ($client) use ($DIVISION_MAP) {
+        $today = Carbon::today()->format('Y-m-d');
+        $threeDaysFromNow = Carbon::today()->addDays(3)->format('Y-m-d');
+
+        $baseEvents = $tickets->map(function ($client) use ($DIVISION_MAP, $today, $threeDaysFromNow) {
             $detail = $client->detail;
             $event = $client->event;
 
@@ -204,7 +256,7 @@ class TicketEventController extends Controller
             } elseif (! empty($client->created_at)) {
                 $startDateStr = Carbon::parse($client->created_at)->format('Y-m-d');
             } else {
-                $startDateStr = Carbon::today()->format('Y-m-d');
+                $startDateStr = $today;
             }
 
             // Determine End Date
@@ -224,12 +276,18 @@ class TicketEventController extends Controller
             $endCarbon = Carbon::parse($endDateStr);
             $durationDays = (int) max(1, $startCarbon->diffInDays($endCarbon) + 1);
 
-            $today = Carbon::today()->format('Y-m-d');
             $isOngoing = ($startDateStr <= $today && $endDateStr >= $today);
             $isUpcoming = ($startDateStr > $today);
             $isPast = ($endDateStr < $today);
 
             $status = $detail?->ticket_status ?: 'New';
+            $assignedStaff = trim((string) ($detail?->ticket_assigned_staff ?? ''));
+            $attendedBy = trim((string) ($detail?->ticket_attended_by ?? ''));
+
+            $isTerminal = in_array(strtolower($status), ['completed', 'cancelled', 'closed'], true);
+            $isUnassigned = ! $isTerminal && $assignedStaff === '' && $attendedBy === '';
+            $isUrgentUnassigned = $isUnassigned && ($isOngoing || ($startDateStr >= $today && $startDateStr <= $threeDaysFromNow));
+            $daysUntilStart = $isUpcoming ? (int) Carbon::today()->diffInDays($startCarbon) : 0;
 
             $daysElapsed = 0;
             if ($isOngoing) {
@@ -254,12 +312,14 @@ class TicketEventController extends Controller
                 'ticket_type' => $detail?->ticket_type ?: 'Events',
                 'ticket_nature_of_support' => $detail?->ticket_nature_of_support ?: 'Events',
                 'ticket_support_type' => $detail?->ticket_support_type ?: 'Events',
-                'ticket_assigned_staff' => $detail?->ticket_assigned_staff ?: null,
-                'ticket_attended_by' => $detail?->ticket_attended_by ?: null,
+                'ticket_assigned_staff' => $assignedStaff !== '' ? $assignedStaff : null,
+                'ticket_attended_by' => $attendedBy !== '' ? $attendedBy : null,
                 'ticket_assisted_by' => $detail?->ticket_assisted_by ?: null,
                 'ticket_remarks' => $detail?->ticket_remarks ?: '',
                 'ticket_problem_that_needed_support' => $detail?->ticket_problem_that_needed_support ?: '',
                 'date_requested' => $detail?->date_requested ? Carbon::parse($detail->date_requested)->format('Y-m-d H:i:s') : null,
+                'date_assigned' => $detail?->date_assigned ? Carbon::parse($detail->date_assigned)->format('Y-m-d H:i:s') : null,
+                'date_attended' => $detail?->date_attended ? Carbon::parse($detail->date_attended)->format('Y-m-d H:i:s') : null,
                 'date_completed' => $detail?->date_completed ? Carbon::parse($detail->date_completed)->format('Y-m-d H:i:s') : null,
                 'created_at' => $client->created_at ? Carbon::parse($client->created_at)->format('Y-m-d H:i:s') : null,
                 // Event specific fields
@@ -276,12 +336,86 @@ class TicketEventController extends Controller
                 'is_upcoming' => $isUpcoming,
                 'is_past' => $isPast,
                 'days_elapsed' => $daysElapsed,
+                'days_until_start' => $daysUntilStart,
+                'is_unassigned' => $isUnassigned,
+                'is_urgent_unassigned' => $isUrgentUnassigned,
                 'messages_count' => (int) ($client->messages_count ?? 0),
                 // Nested models for ModalTicketDetails compatibility
                 'detail' => $detail,
                 'event' => $event,
                 'rating' => $client->rating,
             ];
+        })->values();
+
+        // Second pass: Detect Venue & Staff Double-Booking Conflicts among non-cancelled events
+        $ignoredVenues = ['', 'venue not specified', 'n/a', 'none', 'tba', 'zoom / online', 'zoom', 'online'];
+
+        return $baseEvents->map(function (array $ev) use ($baseEvents, $ignoredVenues): array {
+            $statusA = strtolower((string) ($ev['ticket_status'] ?? ''));
+            $isInactiveA = in_array($statusA, ['cancelled', 'closed'], true);
+
+            $venueConflicts = [];
+            $staffConflicts = [];
+
+            if (! $isInactiveA) {
+                $venueA = strtolower(trim((string) ($ev['event_venue'] ?? '')));
+                $hasPhysicalVenueA = ! in_array($venueA, $ignoredVenues, true);
+                $staffA = strtolower(trim((string) ($ev['ticket_assigned_staff'] ?: $ev['ticket_attended_by'] ?: '')));
+
+                foreach ($baseEvents as $other) {
+                    if ($other['client_referenceNo'] === $ev['client_referenceNo']) {
+                        continue;
+                    }
+                    $statusB = strtolower((string) ($other['ticket_status'] ?? ''));
+                    if (in_array($statusB, ['cancelled', 'closed'], true)) {
+                        continue;
+                    }
+
+                    // Check date overlap
+                    $overlaps = ($ev['event_start_date'] <= $other['event_end_date'])
+                        && ($ev['event_end_date'] >= $other['event_start_date']);
+
+                    if (! $overlaps) {
+                        continue;
+                    }
+
+                    // 1. Check Venue Conflict
+                    $venueB = strtolower(trim((string) ($other['event_venue'] ?? '')));
+                    if ($hasPhysicalVenueA && $venueA === $venueB) {
+                        $venueConflicts[] = [
+                            'client_referenceNo' => $other['client_referenceNo'],
+                            'client_name' => $other['client_name'],
+                            'event_venue' => $other['event_venue'],
+                            'event_start_date' => $other['event_start_date'],
+                            'event_end_date' => $other['event_end_date'],
+                            'ticket_assigned_staff' => $other['ticket_assigned_staff'],
+                            'ticket_status' => $other['ticket_status'],
+                        ];
+                    }
+
+                    // 2. Check Staff Conflict
+                    $staffB = strtolower(trim((string) ($other['ticket_assigned_staff'] ?: $other['ticket_attended_by'] ?: '')));
+                    if ($staffA !== '' && $staffA === $staffB) {
+                        $staffConflicts[] = [
+                            'client_referenceNo' => $other['client_referenceNo'],
+                            'client_name' => $other['client_name'],
+                            'event_venue' => $other['event_venue'],
+                            'event_start_date' => $other['event_start_date'],
+                            'event_end_date' => $other['event_end_date'],
+                            'staff_name' => $other['ticket_assigned_staff'] ?: $other['ticket_attended_by'],
+                            'ticket_status' => $other['ticket_status'],
+                        ];
+                    }
+                }
+            }
+
+            $ev['venue_conflicts'] = $venueConflicts;
+            $ev['staff_conflicts'] = $staffConflicts;
+            $ev['has_venue_conflict'] = count($venueConflicts) > 0;
+            $ev['has_staff_conflict'] = count($staffConflicts) > 0;
+            $ev['has_conflict'] = count($venueConflicts) > 0 || count($staffConflicts) > 0;
+
+            return $ev;
         });
     }
 
@@ -306,6 +440,11 @@ class TicketEventController extends Controller
             })->count(),
             'multi_day_count' => $events->filter(fn ($ev) => $ev['is_multi_day'])->count(),
             'completed_count' => $events->filter(fn ($ev) => $ev['ticket_status'] === 'Completed')->count(),
+            'unassigned_active_count' => $events->filter(fn ($ev) => ! empty($ev['is_unassigned']))->count(),
+            'urgent_unassigned_count' => $events->filter(fn ($ev) => ! empty($ev['is_urgent_unassigned']))->count(),
+            'conflict_count' => $events->filter(fn ($ev) => ! empty($ev['has_conflict']))->count(),
+            'venue_conflict_count' => $events->filter(fn ($ev) => ! empty($ev['has_venue_conflict']))->count(),
+            'staff_conflict_count' => $events->filter(fn ($ev) => ! empty($ev['has_staff_conflict']))->count(),
         ];
     }
 

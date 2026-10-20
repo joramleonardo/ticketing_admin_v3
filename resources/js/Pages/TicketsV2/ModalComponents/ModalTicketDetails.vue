@@ -837,8 +837,8 @@
                   </div>
 
                   <div class="flex items-center justify-between gap-2 flex-wrap">
-                    <span class="text-slate-500 font-medium shrink-0">SLA</span>
-                    <TicketSlaBadge :ticket="ticket" :compact="true" />
+                    <span class="text-slate-500 font-medium shrink-0">SLA / TAT</span>
+                    <TicketSlaBadge :ticket="ticket" :compact="true" :show-response-time="true" />
                   </div>
 
                   <!-- Assigned Staff -->
@@ -874,16 +874,22 @@
                       <span>Requested:</span>
                       <span class="font-medium text-slate-700">{{ formatDateTime(ticket?.date_requested || ticketDetail.date_requested || ticket?.created_at || ticketDetail.created_at) }}</span>
                     </div>
-                    <div v-if="ticketDetail.ticket_attended_at || ticketDetail.ticket_attended_by" class="flex items-center justify-between text-slate-500">
+                    <div v-if="ticketDetail.date_assigned || ticket?.date_assigned" class="flex items-center justify-between text-slate-500">
+                      <span>Assigned:</span>
+                      <span class="font-medium text-slate-700">{{ formatDateTime(ticketDetail.date_assigned || ticket?.date_assigned) }}</span>
+                    </div>
+                    <div v-if="ticketDetail.date_attended || ticket?.date_attended || ticketDetail.ticket_attended_at || ticketDetail.ticket_attended_by" class="flex items-center justify-between text-slate-500">
                       <span>Attended:</span>
                       <span class="font-medium text-slate-700">
                         {{ ticketDetail.ticket_attended_by || 'Staff' }}
-                        <span v-if="ticketDetail.ticket_attended_at">({{ formatDateTime(ticketDetail.ticket_attended_at) }})</span>
+                        <span v-if="ticketDetail.date_attended || ticket?.date_attended || ticketDetail.ticket_attended_at">
+                          ({{ formatDateTime(ticketDetail.date_attended || ticket?.date_attended || ticketDetail.ticket_attended_at) }})
+                        </span>
                       </span>
                     </div>
-                    <div v-if="ticketDetail.date_completed" class="flex items-center justify-between text-slate-500">
+                    <div v-if="ticketDetail.date_completed || ticket?.date_completed" class="flex items-center justify-between text-slate-500">
                       <span>Completed:</span>
-                      <span class="font-medium text-slate-700">{{ formatDateTime(ticketDetail.date_completed) }}</span>
+                      <span class="font-medium text-slate-700">{{ formatDateTime(ticketDetail.date_completed || ticket?.date_completed) }}</span>
                     </div>
                   </div>
                 </div>
@@ -1410,18 +1416,27 @@ async function submitAssign() {
       toast.success(`Assigned to ${assignForm.staff} (Pending)`)
       activeActionPanel.value = null
 
+      const nowIso = new Date().toISOString()
       if (localTicket.value) {
         if (!localTicket.value.detail) localTicket.value.detail = {}
         localTicket.value.detail.ticket_type = assignForm.type
         localTicket.value.detail.ticket_assigned_staff = assignForm.staff
         localTicket.value.detail.ticket_status = 'Pending'
         localTicket.value.ticket_status = 'Pending'
+        if (!localTicket.value.detail.date_assigned) {
+          localTicket.value.detail.date_assigned = nowIso
+          localTicket.value.date_assigned = nowIso
+        }
       }
       if (props.ticket && props.ticket.detail) {
         props.ticket.detail.ticket_type = assignForm.type
         props.ticket.detail.ticket_assigned_staff = assignForm.staff
         props.ticket.detail.ticket_status = 'Pending'
         props.ticket.ticket_status = 'Pending'
+        if (!props.ticket.detail.date_assigned) {
+          props.ticket.detail.date_assigned = nowIso
+          props.ticket.date_assigned = nowIso
+        }
       }
 
       fetchActivityLogs(ticketRef.value)
@@ -1448,18 +1463,23 @@ async function attendTicket() {
     onSuccess: (page) => {
       const flashMsg = page?.props?.flash?.success || 'Ticket attended and now In Progress!'
       toast.success(flashMsg)
+      const nowIso = new Date().toISOString()
       if (localTicket.value) {
         if (!localTicket.value.detail) localTicket.value.detail = {}
         localTicket.value.detail.ticket_status = 'In Progress'
         localTicket.value.ticket_status = 'In Progress'
         localTicket.value.detail.ticket_attended_by = currentUserName.value
-        localTicket.value.detail.ticket_attended_at = new Date().toISOString()
+        localTicket.value.detail.ticket_attended_at = nowIso
+        localTicket.value.detail.date_attended = nowIso
+        localTicket.value.date_attended = nowIso
       }
       if (props.ticket && props.ticket.detail) {
         props.ticket.detail.ticket_status = 'In Progress'
         props.ticket.ticket_status = 'In Progress'
         props.ticket.detail.ticket_attended_by = currentUserName.value
-        props.ticket.detail.ticket_attended_at = new Date().toISOString()
+        props.ticket.detail.ticket_attended_at = nowIso
+        props.ticket.detail.date_attended = nowIso
+        props.ticket.date_attended = nowIso
       }
 
       fetchActivityLogs(ticketRef.value)
