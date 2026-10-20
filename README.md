@@ -18,7 +18,7 @@
 
 ---
 
-## 📌 Overview
+## Overview
 
 The **DOST-STII IT Ticketing & Events Management System** is an enterprise-grade IT Service Management (ITSM), Technical Support Dispatch, Events Scheduling, and Customer Satisfaction Measurement (CSM) platform built specifically for the **Department of Science and Technology - Science and Technology Information Institute (DOST-STII)**.
 
@@ -26,9 +26,9 @@ Combining a modern **Laravel 12** backend with a reactive **Inertia.js v2** and 
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🎫 1. Comprehensive Ticket Lifecycle & Triage (Tickets V2)
+### 1. Comprehensive Ticket Lifecycle & Triage (Tickets V2)
 - **Multi-State Lifecycle**: Seamless transition across `New`, `Pending`, `In Progress`, `Completed`, and `Closed` statuses.
 - **SLA & TAT Monitoring**:
   - Precision Turnaround Time (TAT) clock initiated upon ticket assignment/attendance.
@@ -43,7 +43,7 @@ Combining a modern **Laravel 12** backend with a reactive **Inertia.js v2** and 
 - **Real-Time Client-Staff Messaging**: Integrated ticket thread allowing two-way communication and document attachments between clients and attending IT personnel.
 - **Audit Trail & Activity Logs**: Immutable chronological activity logging capturing every dispatch action, status change, and internal note.
 
-### 📅 2. IT Events Calendar & Monitoring Workspace
+### 2. IT Events Calendar & Monitoring Workspace
 - **Multi-View Scheduling Board**:
   - **Month View**: Overview with status pills, conflict badges, and multi-day timeline spans.
   - **Week View**: Detailed daily breakdown with time slots and technician assignments.
@@ -52,45 +52,45 @@ Combining a modern **Laravel 12** backend with a reactive **Inertia.js v2** and 
 - **Conflict & Double-Booking Detection**:
   - Real-time overlap detection for physical venues and IT staff technicians.
   - Top Schedule Conflict Alert Banner with one-click filtering.
-  - Proactive dispatch warnings (`⚠️ Busy (#Ref)`) when assigning staff members already committed to overlapping events.
+  - Proactive dispatch warnings (`Busy (#Ref)`) when assigning staff members already committed to overlapping events.
 - **Click-to-Schedule & Inline Quick Actions**:
   - Quick-schedule events directly by clicking any calendar date cell.
   - Inline event dispatch, schedule adjustments, and status transitions directly from the preview drawer.
 - **Urgent Unassigned Event Warnings**: Visual alerts for upcoming events lacking assigned technical support within 48–72 hours.
 
-### ⚡ 3. Role-Based Workspaces & Navigation
-- **👑 Super Admin (Executive Administration)**:
+### 3. Role-Based Workspaces & Navigation
+- **Super Admin (Executive Administration)**:
   - High-level executive overview, agency-wide SLA compliance rates, division-by-division request breakdowns, and technician workload metrics.
   - Full user management, role assignments, and account activation controls.
   - Monthly ticket summary CSV exports.
-- **🛡️ Admin (Dispatcher & Triage)**:
+- **Admin (Dispatcher & Triage)**:
   - Triage & Queue Dispatcher dashboard highlighting unassigned tickets.
   - Events management and venue conflict resolution.
   - Customer ratings and CSM compliance reports.
-- **⚡ Staff Specialist (Personal Workstation)**:
+- **Staff Specialist (Personal Workstation)**:
   - Dedicated **"My Tickets"** queue sorted by active assignments, in-progress items, overdue warnings, and completed tasks.
   - One-click ticket attendance (`Attend Ticket`), status completion, and technical remarks.
   - Personal productivity metrics and performance indicators.
 
-### 🌐 4. Self-Service Client Portal (`/client`)
+### 4. Self-Service Client Portal (`/client`)
 - **Frictionless Ticket Submission**: Submit technical support requests without requiring prior authentication.
 - **Support Classifications**: Hardware, Software, Network/Internet, Server-related, Events Support, and Preventive Maintenance.
 - **Multi-Day Event Booking**: Specify venue, start/end schedules, and logistical requirements.
 - **Live Ticket Tracking**: Real-time status tracker via employee ID code or reference code (`/client/track/{employee_code}`).
 - **Interactive Ratings & Feedback (CSM)**: Rate resolved tickets through a streamlined Customer Satisfaction Measurement survey (`/client/rate/{ref}`).
 
-### 📊 5. Customer Satisfaction Measurement (CSM) & Analytics
+### 5. Customer Satisfaction Measurement (CSM) & Analytics
 - Government-standard CSM survey reporting covering Service Quality Dimensions (SQD):
   - Responsiveness, Reliability, Integrity, Facility, Communication, Costs, and Overall Satisfaction.
 - Comprehensive ratings dashboard with Net Promoter Score (NPS), CSAT indices, and division analytics.
 
-### 🔔 6. Live Dispatch Mode & Sound Notifications
+### 6. Live Dispatch Mode & Sound Notifications
 - Persistent background polling with live pulsing status indicator.
 - Synthesized Web Audio API sound alert engine (zero external audio asset latency) with customizable ringtone presets (Chime, Bell, Ping, Modern Synth) and per-user mute controls.
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 | Layer | Technology | Description |
 | :--- | :--- | :--- |
@@ -108,7 +108,7 @@ Combining a modern **Laravel 12** backend with a reactive **Inertia.js v2** and 
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 Ensure your local development environment meets the following requirements:
@@ -192,7 +192,7 @@ Ensure your local development environment meets the following requirements:
 
 ---
 
-## 🧪 Testing & Quality Assurance
+## Testing & Quality Assurance
 
 This project adheres to rigorous testing standards utilizing **Pest v3**.
 
@@ -212,7 +212,7 @@ vendor/bin/pint --dirty
 
 ---
 
-## 📂 Project Architecture
+## Project Architecture
 
 ```
 ticketing_admin_v3/
@@ -251,7 +251,7 @@ ticketing_admin_v3/
 
 ---
 
-## 🔒 User Roles & Access Control
+## User Roles & Access Control
 
 | Role | Default Landing | Description |
 | :--- | :--- | :--- |
@@ -262,7 +262,7 @@ ticketing_admin_v3/
 
 ---
 
-## 📄 License
+## License
 
 This software is open-sourced under the [MIT License](LICENSE).
 
